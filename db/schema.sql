@@ -75,3 +75,14 @@ DELETE FROM audit_logs WHERE user_id IN ('u-admin', 'u-pharmacist', 'u-cashier')
 DELETE FROM medicines WHERE id IN ('med-001', 'med-002', 'med-003', 'med-004');
 DELETE FROM suppliers WHERE id IN ('sup-001', 'sup-002', 'sup-003') AND NOT EXISTS (SELECT 1 FROM medicines WHERE supplier_id = suppliers.id);
 DELETE FROM users WHERE id IN ('u-admin', 'u-pharmacist', 'u-cashier') AND lower(username) <> 'bbubt';
+INSERT INTO users (id, username, password_hash, full_name, role, email) VALUES
+('account-admin', 'admin', crypt('admin123', gen_salt('bf')), 'Admin User', 'ADMIN', 'admin@pharmasync.local'),
+('account-pharmacist', 'pharmacist', crypt('pharma123', gen_salt('bf')), 'Pharmacist', 'PHARMACIST', 'pharmacist@pharmasync.local'),
+('account-cashier', 'cashier', crypt('cashier123', gen_salt('bf')), 'Cashier', 'CASHIER', 'cashier@pharmasync.local')
+ON CONFLICT (username) DO UPDATE SET
+  password_hash = EXCLUDED.password_hash,
+  full_name = EXCLUDED.full_name,
+  role = EXCLUDED.role,
+  email = EXCLUDED.email,
+  status = 'ACTIVE',
+  updated_at = now();
