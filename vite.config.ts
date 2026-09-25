@@ -14,6 +14,9 @@ export default defineConfig({
     host: "0.0.0.0",
     port: Number(process.env.PORT ?? 4175),
     strictPort: true,
+    proxy: {
+      "/api": process.env.API_URL ?? "http://localhost:8787",
+    },
   },
   preview: {
     host: "0.0.0.0",

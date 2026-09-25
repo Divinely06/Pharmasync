@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AccessArea,
   AuditLog,
@@ -13,8 +13,6 @@ import {
   canAccess,
   fmt,
   hashPassword,
-  seedState,
-  WEEKLY_SALES,
 } from "./data";
 import {
   BarChart,
@@ -39,7 +37,6 @@ type Page = "dashboard" | "pos" | "inventory" | "suppliers" | "users" | "audit" 
 
 type CartItem = Medicine & { quantity: number };
 
-const STORAGE_KEY = "pharmacy_system_state_v1";
 const PIE_COLORS = ["#0d9488", "#6366f1", "#f59e0b", "#ec4899", "#22c55e"];
 
 const navMeta: { id: Page; label: string; area: AccessArea; icon: React.ReactNode }[] = [
@@ -52,83 +49,90 @@ const navMeta: { id: Page; label: string; area: AccessArea; icon: React.ReactNod
   { id: "audit", label: "Audit Logs", area: "AUDIT", icon: <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M12 2.25a9.75 9.75 0 1 0 9.75 9.75A9.76 9.76 0 0 0 12 2.25Zm0 4.5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0V7.5A.75.75 0 0 1 12 6.75Zm0 9.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" /></svg> },
 ];
 
-const defaultState = seedState();
-
-const loadState = (): PharmacyState => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultState;
-    return JSON.parse(raw) as PharmacyState;
-  } catch {
-    return defaultState;
-  }
+const emptyState: PharmacyState = {
+  users: [],
+  suppliers: [],
+  medicines: [],
+  purchases: [],
+  purchaseItems: [],
+  sales: [],
+  saleItems: [],
+  inventoryTransactions: [],
+  auditLogs: [],
 };
 
+const hydrateState = (databaseState: PharmacyState): PharmacyState => ({
+  ...databaseState,
+  medicines: databaseState.medicines.map((medicine) => ({ ...medicine, unitPrice: Number(medicine.unitPrice) })),
+  sales: databaseState.sales.map((sale) => ({
+    ...sale,
+    subtotal: Number(sale.subtotal),
+    discount: Number(sale.discount),
+    tax: Number(sale.tax),
+    totalAmount: Number(sale.totalAmount),
+    amountReceived: Number(sale.amountReceived),
+    changeAmount: Number(sale.changeAmount),
+    items: databaseState.saleItems.filter((item) => item.saleId === sale.id).map((item) => ({
+      medicineId: item.medicineId,
+      medicineName: databaseState.medicines.find((medicine) => medicine.id === item.medicineId)?.brandName ?? "Unknown medicine",
+      quantity: Number(item.quantity),
+      unitPrice: Number(item.unitPrice),
+      subtotal: Number(item.subtotal),
+    })),
+  })),
+});
+
 function App() {
-  const [state, setState] = useState<PharmacyState>(loadState);
+  const [state, setState] = useState<PharmacyState>(emptyState);
   const [page, setPage] = useState<Page>("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [authUser, setAuthUser] = useState<PharmacyUser | null>(null);
+  const [apiToken, setApiToken] = useState<string | null>(null);
+  const [loginError, setLoginError] = useState("");
+  const [loginPending, setLoginPending] = useState(false);
   const [login, setLogin] = useState({ username: "", password: "" });
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [state]);
-
-  const loginUser = (username: string, password: string) => {
-    const user = state.users.find(
-      (entry) => entry.username.toLowerCase() === username.toLowerCase() && entry.passwordHash === hashPassword(password) && entry.status === "ACTIVE"
-    );
-
-    if (!user) {
-      return false;
+  const loginUser = async (username: string, password: string) => {
+    setLoginPending(true);
+    setLoginError("");
+    try {
+      const loginResponse = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!loginResponse.ok) throw new Error(loginResponse.status === 401 ? "Invalid username or password." : "Unable to sign in.");
+      const result = await loginResponse.json();
+      const token = result.token as string;
+      const stateResponse = await fetch("/api/state", { headers: { Authorization: `Bearer ${token}` } });
+      if (!stateResponse.ok) throw new Error("Unable to load pharmacy data.");
+      const databaseState = await stateResponse.json() as PharmacyState;
+      const user: PharmacyUser = {
+        ...result.user,
+        fullName: result.user.full_name,
+        createdAt: result.user.created_at,
+        updatedAt: result.user.updated_at,
+        lastLogin: result.user.last_login,
+      };
+      setApiToken(token);
+      setState(hydrateState(databaseState));
+      setAuthUser(user);
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : "Unable to connect to the database.");
+    } finally {
+      setLoginPending(false);
     }
-
-    setAuthUser(user);
-    setState((prev) => ({
-      ...prev,
-      users: prev.users.map((entry) => (entry.id === user.id ? { ...entry, lastLogin: new Date().toISOString() } : entry)),
-      auditLogs: [
-        buildAuditLog({
-          userId: user.id,
-          action: "LOGIN",
-          entityType: "USER",
-          entityId: user.id,
-          success: true,
-          metadata: { username: user.username, ipAddress: "127.0.0.1" },
-        }),
-        ...prev.auditLogs,
-      ].slice(0, 200),
-    }));
-    return true;
   };
 
   const logout = () => {
-    if (authUser) {
-      setState((prev) => ({
-        ...prev,
-        auditLogs: [
-          buildAuditLog({
-            userId: authUser.id,
-            action: "LOGOUT",
-            entityType: "USER",
-            entityId: authUser.id,
-            success: true,
-            metadata: { username: authUser.username },
-          }),
-          ...prev.auditLogs,
-        ].slice(0, 200),
-      }));
-    }
+    setApiToken(null);
     setAuthUser(null);
   };
 
-  const currentUser = authUser ?? state.users[0];
-  const visibleNav = navMeta.filter((item) => canAccess(currentUser.role, item.area));
-
+  const today = new Date().toISOString().slice(0, 10);
   const lowStockCount = state.medicines.filter((item) => item.quantity <= item.reorderLevel).length;
   const todayRevenue = state.sales
-    .filter((sale) => sale.transactionDate === "2026-09-10" && sale.status === "COMPLETED")
+    .filter((sale) => sale.transactionDate.slice(0, 10) === today && sale.status === "COMPLETED")
     .reduce((sum, sale) => sum + sale.totalAmount, 0);
 
   if (!authUser) {
@@ -173,16 +177,13 @@ function App() {
             </div>
 
             <button
-              onClick={() => {
-                const ok = loginUser(login.username, login.password);
-                if (!ok) {
-                  window.alert("Invalid username or password.");
-                }
-              }}
+              onClick={() => void loginUser(login.username, login.password)}
+              disabled={loginPending}
               className="w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white shadow hover:bg-slate-700"
             >
-              Sign in
+              {loginPending ? "Signing in..." : "Sign in"}
             </button>
+            {loginError && <div role="alert" className="mt-3 text-sm text-red-600">{loginError}</div>}
 
           </div>
         </div>
@@ -190,7 +191,9 @@ function App() {
     );
   }
 
-  return <SystemShell {...{ state, setState, page, setPage, mobileOpen, setMobileOpen, currentUser, logout, lowStockCount, todayRevenue, visibleNav }} />;
+  const currentUser = authUser;
+  const visibleNav = navMeta.filter((item) => canAccess(currentUser.role, item.area));
+  return <SystemShell {...{ state, setState, page, setPage, mobileOpen, setMobileOpen, currentUser, logout, lowStockCount, todayRevenue, visibleNav, apiToken }} />;
 }
 
 function SystemShell({
@@ -205,6 +208,7 @@ function SystemShell({
   lowStockCount,
   todayRevenue,
   visibleNav,
+  apiToken,
 }: {
   state: PharmacyState;
   setState: React.Dispatch<React.SetStateAction<PharmacyState>>;
@@ -217,6 +221,7 @@ function SystemShell({
   lowStockCount: number;
   todayRevenue: number;
   visibleNav: { id: Page; label: string; area: AccessArea; icon: React.ReactNode }[];
+  apiToken: string | null;
 }) {
   return (
     <div className="app-shell flex h-screen bg-white text-slate-800">
@@ -230,7 +235,7 @@ function SystemShell({
         <div className="mx-3 mt-4 rounded-2xl bg-gradient-to-r from-teal-600 to-cyan-600 p-4 text-white shadow-lg">
           <div className="text-[10px] uppercase tracking-[0.22em] text-teal-100">Today</div>
           <div className="mt-1 text-2xl font-bold">{fmt(todayRevenue)}</div>
-          <div className="mt-1 text-xs text-teal-100">Sales captured {state.sales.filter((sale) => sale.transactionDate === "2026-09-10").length} transactions</div>
+          <div className="mt-1 text-xs text-teal-100">Sales captured {state.sales.filter((sale) => sale.transactionDate.slice(0, 10) === new Date().toISOString().slice(0, 10)).length} transactions</div>
         </div>
 
         <nav className="space-y-1 p-3">
@@ -290,8 +295,8 @@ function SystemShell({
 
         <div className="h-[calc(100%-73px)] overflow-auto p-4 md:p-6">
           {page === "dashboard" && <DashboardPage state={state} />}
-          {page === "pos" && <PosPage state={state} setState={setState} user={currentUser} />}
-          {page === "inventory" && <InventoryPage state={state} setState={setState} />}
+          {page === "pos" && <PosPage state={state} setState={setState} user={currentUser} apiToken={apiToken} />}
+          {page === "inventory" && <InventoryPage state={state} setState={setState} apiToken={apiToken} />}
           {page === "suppliers" && <SuppliersPage state={state} setState={setState} />}
           {page === "users" && currentUser.role === "ADMIN" && <UsersPage state={state} setState={setState} />}
           {page === "audit" && currentUser.role === "ADMIN" && <AuditPage logs={state.auditLogs} />}
@@ -303,12 +308,23 @@ function SystemShell({
 }
 
 function DashboardPage({ state }: { state: PharmacyState }) {
-  const todaySales = state.sales.filter((sale) => sale.transactionDate === "2026-09-10");
+  const today = new Date().toISOString().slice(0, 10);
+  const todaySales = state.sales.filter((sale) => sale.transactionDate.slice(0, 10) === today && sale.status === "COMPLETED");
   const totalRevenue = todaySales.reduce((sum, sale) => sum + sale.totalAmount, 0);
   const lowStock = state.medicines.filter((item) => item.quantity <= item.reorderLevel);
   const expiringSoon = state.medicines.filter((item) => {
-    const days = (new Date(item.expirationDate).getTime() - new Date("2026-09-10").getTime()) / 86400000;
+    const days = (new Date(item.expirationDate).getTime() - new Date(today).getTime()) / 86400000;
     return days <= 90 && days > 0;
+  });
+  const weeklySales = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date();
+    date.setDate(date.getDate() - (6 - index));
+    const dateKey = date.toISOString().slice(0, 10);
+    const salesForDay = state.sales.filter((sale) => sale.transactionDate.slice(0, 10) === dateKey && sale.status === "COMPLETED");
+    return {
+      day: date.toLocaleDateString(undefined, { weekday: "short" }),
+      revenue: salesForDay.reduce((sum, sale) => sum + sale.totalAmount, 0),
+    };
   });
 
   const paymentBreakdown = Object.entries(
@@ -334,10 +350,9 @@ function DashboardPage({ state }: { state: PharmacyState }) {
               <div className="text-sm font-bold text-slate-900">Weekly Revenue</div>
               <div className="text-xs text-slate-500">Last 7 days</div>
             </div>
-            <div className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">+12.4%</div>
           </div>
           <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={WEEKLY_SALES}>
+            <BarChart data={weeklySales}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
               <XAxis dataKey="day" tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(value) => `₱${value / 1000}k`} />
@@ -361,28 +376,7 @@ function DashboardPage({ state }: { state: PharmacyState }) {
         </div>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-100 p-4">
-            <div className="text-sm font-bold text-slate-900">Recent Sales</div>
-            <div className="text-xs text-slate-500">Today</div>
-          </div>
-          <div className="divide-y divide-slate-100">
-            {todaySales.slice().reverse().map((sale) => (
-              <div key={sale.id} className="flex items-center justify-between gap-3 p-4">
-                <div>
-                  <div className="text-sm font-semibold text-slate-800">{sale.id}</div>
-                  <div className="text-xs text-slate-500">{sale.transactionTime} · {sale.cashierName}</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm font-bold text-slate-900">{fmt(sale.totalAmount)}</div>
-                  <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{sale.paymentMethod}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
+      <div>
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex items-center justify-between border-b border-slate-100 p-4">
             <div className="text-sm font-bold text-slate-900">Stock Alerts</div>
@@ -412,7 +406,7 @@ function DashboardPage({ state }: { state: PharmacyState }) {
   );
 }
 
-function PosPage({ state, setState, user }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>>; user: PharmacyUser }) {
+function PosPage({ state, setState, user, apiToken }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>>; user: PharmacyUser; apiToken: string | null }) {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -455,84 +449,48 @@ function PosPage({ state, setState, user }: { state: PharmacyState; setState: Re
 
   const removeFromCart = (medicineId: string) => setCart((prev) => prev.filter((item) => item.id !== medicineId));
 
-  const submitSale = () => {
+  const submitSale = async () => {
     if (!cart.length) return;
     if (Number(amountReceived || 0) < total && paymentMethod === "Cash") {
       window.alert("Cash amount must cover the total.");
       return;
     }
 
-    const saleId = `TXN-${Date.now().toString().slice(-6)}`;
-    const sale: SaleRecord = {
-      id: saleId,
-      cashierId: user.id,
-      cashierName: user.fullName,
-      transactionDate: "2026-09-10",
-      transactionTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
-      subtotal,
-      discount: discountValue,
-      tax: taxValue,
-      totalAmount: total,
-      paymentMethod,
-      amountReceived: Number(amountReceived || total),
-      changeAmount: paymentMethod === "Cash" ? Number(Math.max(0, change).toFixed(2)) : 0,
-      status: "COMPLETED",
-      items: cart.map((item) => ({
-        medicineId: item.id,
-        medicineName: item.brandName,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        subtotal: Number((item.unitPrice * item.quantity).toFixed(2)),
-      })),
-    };
-
-    setState((prev) => {
-      const nextMedicines = prev.medicines.map((medicine) => {
-        const item = cart.find((entry) => entry.id === medicine.id);
-        if (!item) return medicine;
-        const newQty = Math.max(0, medicine.quantity - item.quantity);
-        return { ...medicine, quantity: newQty, updatedAt: new Date().toISOString() };
+    try {
+      const response = await fetch("/api/sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiToken}` },
+        body: JSON.stringify({ items: cart.map((item) => ({ medicineId: item.id, quantity: item.quantity })), discount: discountValue, tax: taxValue, paymentMethod, amountReceived: Number(amountReceived || total) }),
       });
-
-      const nextInventory = prev.inventoryTransactions.concat(
-        cart.map((item) => ({
-          id: `INV-${Date.now()}-${item.id}`,
-          medicineId: item.id,
-          transactionType: "SALE",
-          quantity: item.quantity,
-          previousQuantity: prev.medicines.find((m) => m.id === item.id)?.quantity ?? 0,
-          resultingQuantity: Math.max(0, (prev.medicines.find((m) => m.id === item.id)?.quantity ?? 0) - item.quantity),
-          referenceId: saleId,
-          performedBy: user.id,
-          timestamp: new Date().toISOString(),
-          notes: `POS sale ${saleId}`,
-        }))
-      );
-
-      return {
-        ...prev,
-        medicines: nextMedicines,
-        sales: [sale, ...prev.sales],
-        inventoryTransactions: nextInventory,
-        auditLogs: [
-          buildAuditLog({
-            userId: user.id,
-            action: "SALE_COMPLETED",
-            entityType: "SALE",
-            entityId: saleId,
-            success: true,
-            metadata: { total: total, paymentMethod },
-          }),
-          ...prev.auditLogs,
-        ].slice(0, 200),
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "Unable to complete sale.");
+      const sale: SaleRecord = {
+        id: result.id,
+        cashierId: user.id,
+        cashierName: user.fullName,
+        transactionDate: new Date().toISOString(),
+        transactionTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
+        subtotal: result.subtotal,
+        discount: result.discount,
+        tax: result.tax,
+        totalAmount: result.totalAmount,
+        paymentMethod,
+        amountReceived: result.amountReceived,
+        changeAmount: result.changeAmount,
+        status: "COMPLETED",
+        items: cart.map((item) => ({ medicineId: item.id, medicineName: item.brandName, quantity: item.quantity, unitPrice: item.unitPrice, subtotal: item.unitPrice * item.quantity })),
       };
-    });
-
+      const stateResponse = await fetch("/api/state", { headers: { Authorization: `Bearer ${apiToken}` } });
+      if (!stateResponse.ok) throw new Error("Sale saved, but pharmacy data could not be refreshed.");
+      setState(hydrateState(await stateResponse.json() as PharmacyState));
     setReceipt(sale);
     setCart([]);
     setDiscount("0");
     setAmountReceived("0");
     setPaymentMethod("Cash");
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Unable to complete sale.");
+    }
   };
 
   if (receipt) {
@@ -665,7 +623,7 @@ function PosPage({ state, setState, user }: { state: PharmacyState; setState: Re
   );
 }
 
-function InventoryPage({ state, setState }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>> }) {
+function InventoryPage({ state, setState, apiToken }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>>; apiToken: string | null }) {
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<{ mode: "Add" | "Edit"; item?: Medicine } | null>(null);
   const [draft, setDraft] = useState<Partial<Medicine>>({});
@@ -705,70 +663,46 @@ function InventoryPage({ state, setState }: { state: PharmacyState; setState: Re
     setModal({ mode: "Edit", item });
   };
 
-  const saveItem = () => {
+  const reloadState = async () => {
+    const response = await fetch("/api/state", { headers: { Authorization: `Bearer ${apiToken}` } });
+    if (!response.ok) throw new Error("Saved, but inventory could not be refreshed.");
+    setState(hydrateState(await response.json() as PharmacyState));
+  };
+
+  const saveItem = async () => {
     if (!draft.brandName || !draft.genericName || !draft.barcode || !draft.batchNumber || !draft.expirationDate) {
       window.alert("Please complete all required fields.");
       return;
     }
 
-    if (modal?.mode === "Edit" && modal.item) {
-      setState((prev) => ({
-        ...prev,
-        medicines: prev.medicines.map((medicine) => (medicine.id === modal.item!.id ? { ...medicine, ...draft, updatedAt: new Date().toISOString() } : medicine)),
-        auditLogs: [
-          buildAuditLog({ userId: state.users[0].id, action: "UPDATE_MEDICINE", entityType: "MEDICINE", entityId: modal.item!.id, success: true, metadata: { brandName: draft.brandName } }),
-          ...prev.auditLogs,
-        ].slice(0, 200),
-      }));
-    } else {
-      const newItem: Medicine = {
-        id: `med-${Date.now()}`,
-        barcode: String(draft.barcode ?? ""),
-        genericName: String(draft.genericName ?? ""),
-        brandName: String(draft.brandName ?? ""),
-        medicineType: String(draft.medicineType ?? "Antibiotic"),
-        dosageForm: String(draft.dosageForm ?? "Tablet"),
-        strength: String(draft.strength ?? "500mg"),
-        prescriptionRequired: Boolean(draft.prescriptionRequired),
-        description: String(draft.description ?? ""),
-        dosageInformation: String(draft.dosageInformation ?? "Reference information only: consult a licensed professional."),
-        precautions: String(draft.precautions ?? "Reference information only: follow label instructions."),
-        contraindications: String(draft.contraindications ?? "Reference information only: seek professional advice."),
-        storageInformation: String(draft.storageInformation ?? "Store in a cool, dry place."),
-        supplierId: String(draft.supplierId ?? state.suppliers[0]?.id ?? ""),
-        unitPrice: Number(draft.unitPrice ?? 0),
-        quantity: Number(draft.quantity ?? 0),
-        reorderLevel: Number(draft.reorderLevel ?? 10),
-        expirationDate: String(draft.expirationDate ?? "2027-01-01"),
-        batchNumber: String(draft.batchNumber ?? ""),
-        status: "ACTIVE",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      setState((prev) => ({
-        ...prev,
-        medicines: [newItem, ...prev.medicines],
-        auditLogs: [
-          buildAuditLog({ userId: state.users[0].id, action: "CREATE_MEDICINE", entityType: "MEDICINE", entityId: newItem.id, success: true, metadata: { brandName: newItem.brandName } }),
-          ...prev.auditLogs,
-        ].slice(0, 200),
-      }));
+    try {
+      const editingItem = modal?.mode === "Edit" ? modal.item : undefined;
+      const response = await fetch(editingItem ? `/api/medicines/${editingItem.id}` : "/api/medicines", {
+        method: editingItem ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiToken}` },
+        body: JSON.stringify({ ...draft, supplierId: draft.supplierId || null }),
+      });
+      const result = response.status === 204 ? null : await response.json();
+      if (!response.ok) throw new Error(result?.error ?? "Unable to save medicine.");
+      await reloadState();
+      setModal(null);
+      setDraft({});
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Unable to save medicine.");
     }
-
-    setModal(null);
-    setDraft({});
   };
 
-  const deleteItem = (itemId: string) => {
-    setState((prev) => ({
-      ...prev,
-      medicines: prev.medicines.filter((medicine) => medicine.id !== itemId),
-      auditLogs: [
-        buildAuditLog({ userId: state.users[0].id, action: "DELETE_MEDICINE", entityType: "MEDICINE", entityId: itemId, success: true, metadata: { softDelete: true } }),
-        ...prev.auditLogs,
-      ].slice(0, 200),
-    }));
+  const deleteItem = async (itemId: string) => {
+    try {
+      const response = await fetch(`/api/medicines/${itemId}`, { method: "DELETE", headers: { Authorization: `Bearer ${apiToken}` } });
+      if (!response.ok) {
+        const result = await response.json();
+        throw new Error(result.error ?? "Unable to delete medicine.");
+      }
+      await reloadState();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Unable to delete medicine.");
+    }
   };
 
   return (
