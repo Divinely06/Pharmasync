@@ -1,18 +1,37 @@
 import "dotenv/config";
 import express, { type NextFunction, type Request, type Response } from "express";
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import bcrypt from "bcryptjs";
 
 const connectionString = process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI;
 if (!connectionString) throw new Error("DATABASE_URL is required");
 const pool = new Pool({ connectionString, max: Number(process.env.DB_POOL_MAX ?? 2), ssl: connectionString.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined });
+const sessionSecret = process.env.SESSION_SECRET ?? connectionString;
 const app = express();
-const sessions = new Map<string, { id: string; username: string; role: string; expiresAt: number }>();
 app.use(express.json({ limit: "1mb" }));
 app.use((_req, res, next) => { res.header("Access-Control-Allow-Origin", process.env.CLIENT_ORIGIN ?? "http://localhost:4175"); res.header("Access-Control-Allow-Headers", "Content-Type, Authorization"); res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS"); next(); });
 type AuthRequest = Request & { user?: { id: string; username: string; role: string } };
-const auth = (req: AuthRequest, res: Response, next: NextFunction) => { const token = req.header("Authorization")?.replace("Bearer ", ""); const session = token ? sessions.get(token) : undefined; if (!session || session.expiresAt < Date.now()) return res.status(401).json({ error: "Authentication required" }); req.user = session; next(); };
+type SessionPayload = { id: string; username: string; role: string; expiresAt: number };
+const signSession = (session: SessionPayload) => {
+  const payload = Buffer.from(JSON.stringify(session)).toString("base64url");
+  const signature = createHmac("sha256", sessionSecret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+};
+const verifySession = (token?: string): SessionPayload | null => {
+  if (!token) return null;
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature) return null;
+  const expected = createHmac("sha256", sessionSecret).update(payload).digest();
+  const provided = Buffer.from(signature, "base64url");
+  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) return null;
+  try {
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as SessionPayload;
+  } catch {
+    return null;
+  }
+};
+const auth = (req: AuthRequest, res: Response, next: NextFunction) => { const token = req.header("Authorization")?.replace("Bearer ", ""); const session = verifySession(token); if (!session || session.expiresAt < Date.now()) return res.status(401).json({ error: "Authentication required" }); req.user = { id: session.id, username: session.username, role: session.role }; next(); };
 const audit = async (client: PoolClient, userId: string, action: string, entityType: string, entityId: string, metadata: object) => { await client.query("INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, metadata, success) VALUES ($1,$2,$3,$4,$5,$6,true)", [`log-${randomBytes(10).toString("hex")}`, userId, action, entityType, entityId, metadata]); };
 
 app.get("/api/health", async (_req, res) => { const result = await pool.query("SELECT 1 AS ok"); res.json({ ok: result.rows[0].ok === 1, database: "postgresql" }); });
@@ -20,7 +39,7 @@ app.post("/api/login", async (req, res) => {
   const username = String(req.body.username ?? "").trim(); const password = String(req.body.password ?? "");
   const result = await pool.query("SELECT id, username, password_hash, full_name, role, email, status, created_at, updated_at, last_login FROM users WHERE lower(username) = lower($1)", [username]); const user = result.rows[0];
   if (!user || user.status !== "ACTIVE" || !(await bcrypt.compare(password, user.password_hash))) return res.status(401).json({ error: "Invalid username or password" });
-  const token = randomBytes(32).toString("hex"); sessions.set(token, { id: user.id, username: user.username, role: user.role, expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
+  const token = signSession({ id: user.id, username: user.username, role: user.role, expiresAt: Date.now() + 8 * 60 * 60 * 1000 });
   await pool.query("UPDATE users SET last_login = now(), updated_at = now() WHERE id = $1", [user.id]);
   await pool.query("INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, metadata, success) VALUES ($1,$2,'LOGIN','USER',$3,$4,true)", [`log-${randomBytes(10).toString("hex")}`, user.id, user.id, { username: user.username }]);
   const { password_hash: _passwordHash, ...safeUser } = user; res.json({ token, user: safeUser });
@@ -102,4 +121,6 @@ app.post("/api/sales", auth, async (req: AuthRequest, res) => {
   } catch (error) { await client.query("ROLLBACK"); res.status(400).json({ error: error instanceof Error ? error.message : "Sale failed" }); } finally { client.release(); }
 });
 const port = Number(process.env.PORT ?? process.env.API_PORT ?? 8787);
-app.listen(port, "0.0.0.0", () => console.log(`PharmaSync API listening on port ${port}`));
+if (!process.env.VERCEL) app.listen(port, "0.0.0.0", () => console.log(`PharmaSync API listening on port ${port}`));
+
+export default app;

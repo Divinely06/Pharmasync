@@ -4,6 +4,10 @@
 
 The application includes a PostgreSQL API in `server`.
 
+### Vercel
+
+Vercel serves the Vite frontend and the API function in `api/[...path].ts`. Add `DATABASE_URL` to the Vercel project's Environment Variables using the same PostgreSQL connection string as the local `.env`, then redeploy. The local `.env` file is not uploaded to Vercel. Optionally set `SESSION_SECRET` to a long random value; if omitted, the database connection string is used to sign sessions.
+
 ### Clever Cloud
 
 1. In Clever Cloud, create or open the PostgreSQL addon and attach it to the application running this project.
