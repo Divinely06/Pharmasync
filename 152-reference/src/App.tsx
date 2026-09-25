@@ -334,7 +334,7 @@ function DashboardPage({ state }: { state: PharmacyState }) {
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
               <XAxis dataKey="day" tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(value) => `₱${value / 1000}k`} />
-              <Tooltip formatter={(value: number) => fmt(value)} />
+              <Tooltip formatter={(value) => fmt(Number(value ?? 0))} />
               <Bar dataKey="revenue" radius={[8, 8, 0, 0]} fill="#0d9488" />
             </BarChart>
           </ResponsiveContainer>
@@ -347,7 +347,7 @@ function DashboardPage({ state }: { state: PharmacyState }) {
               <Pie data={paymentBreakdown.map(([name, value]) => ({ name, value }))} dataKey="value" innerRadius={45} outerRadius={75} paddingAngle={3}>
                 {paymentBreakdown.map((entry, index) => <Cell key={entry[0]} fill={PIE_COLORS[index % PIE_COLORS.length]} />)}
               </Pie>
-              <Tooltip formatter={(value: number) => fmt(value)} />
+              <Tooltip formatter={(value) => fmt(Number(value ?? 0))} />
               <Legend />
             </PieChart>
           </ResponsiveContainer>
@@ -1093,7 +1093,7 @@ function ReportsPage({ state }: { state: PharmacyState }) {
   });
 
   const download = (name: string, rows: string[][]) => {
-    const csv = rows.map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(",")).join("\n");
+    const csv = rows.map((row) => row.map((value) => `"${value.replace(/"/g, '""')}"`).join(",")).join("\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
