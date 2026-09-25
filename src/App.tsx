@@ -69,7 +69,7 @@ function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [authUser, setAuthUser] = useState<PharmacyUser | null>(null);
-  const [login, setLogin] = useState({ username: "admin", password: "admin123" });
+  const [login, setLogin] = useState({ username: "", password: "" });
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -134,9 +134,9 @@ function App() {
   if (!authUser) {
     return (
       <div
-        className="login-background relative flex min-h-screen items-center justify-center px-4 pb-8 pt-28 sm:px-8 sm:pt-32"
+        className="login-background relative flex min-h-screen items-center justify-center px-4 py-8 sm:px-8"
         style={{
-          backgroundImage: `linear-gradient(rgba(255,255,255,0.72), rgba(255,255,255,0.84)), url(${pharmaBackground})`,
+          backgroundImage: `linear-gradient(rgba(255,255,255,0.32), rgba(255,255,255,0.42)), url(${pharmaBackground})`,
           backgroundSize: "cover",
           backgroundPosition: "center",
         }}
@@ -183,9 +183,6 @@ function App() {
               Sign in
             </button>
 
-            <div className="mt-5 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
-              Demo accounts: admin / admin123 · pharmacist / pharma123 · cashier / cashier123
-            </div>
           </div>
         </div>
       </div>
