@@ -24,19 +24,14 @@ html, body, #root {
 
 :root {
   color: #243447;
-  background: #e0ecde;
+  background: #ffffff;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
 
 body {
   margin: 0;
-  background:
-    linear-gradient(rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.42)),
-    linear-gradient(90deg, rgba(44, 105, 117, 0.035) 1px, transparent 1px),
-    linear-gradient(rgba(44, 105, 117, 0.035) 1px, transparent 1px),
-    #e0ecde;
-  background-size: auto, 28px 28px, 28px 28px;
+  background: #ffffff;
 }
 
 button, input, select {
@@ -60,15 +55,13 @@ select:focus-visible {
 }
 
 .app-shell {
-  background: rgba(224, 236, 222, 0.74);
+  background: #ffffff;
 }
 
 .login-background {
   position: relative;
   overflow: hidden;
-  background:
-    linear-gradient(135deg, rgba(224, 236, 222, 0.92), rgba(238, 248, 244, 0.96)),
-    repeating-linear-gradient(45deg, rgba(44, 105, 117, 0.045) 0, rgba(44, 105, 117, 0.045) 1px, transparent 1px, transparent 34px);
+  background-color: #f8fafc;
 }
 
 .login-background::before,
