@@ -1,172 +1,1132 @@
-import { useState } from "react";
-import { Product, SaleRecord, PRODUCTS, SALES, fmt } from "./data";
-import Dashboard from "./components/Dashboard";
-import POS from "./components/POS";
-import Inventory from "./components/Inventory";
-import Reports from "./components/Reports";
+import { useEffect, useMemo, useState } from "react";
+import {
+  AccessArea,
+  AuditLog,
+  Medicine,
+  PharmacyState,
+  PharmacyUser,
+  SaleRecord,
+  Supplier,
+  UserRole,
+  buildAuditLog,
+  calculateTotals,
+  canAccess,
+  fmt,
+  hashPassword,
+  seedState,
+  WEEKLY_SALES,
+} from "./data";
+import {
+  BarChart,
+  Bar,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
-type Page = "dashboard" | "pos" | "inventory" | "reports";
+type Page = "dashboard" | "pos" | "inventory" | "suppliers" | "users" | "audit" | "reports";
 
-const NAV: { id: Page; label: string; icon: React.ReactNode }[] = [
-  {
-    id: "dashboard",
-    label: "Dashboard",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="currentColor" className="w-4.5 h-4.5">
-        <path d="M11.47 3.841a.75.75 0 0 1 1.06 0l8.69 8.69a.75.75 0 1 0 1.06-1.061l-8.689-8.69a2.25 2.25 0 0 0-3.182 0l-8.69 8.69a.75.75 0 1 0 1.061 1.06l8.69-8.689Z" />
-        <path d="m12 5.432 8.159 8.159c.03.03.06.058.091.086v6.198c0 1.035-.84 1.875-1.875 1.875H15a.75.75 0 0 1-.75-.75v-4.5a.75.75 0 0 0-.75-.75h-3a.75.75 0 0 0-.75.75V21a.75.75 0 0 1-.75.75H5.625a1.875 1.875 0 0 1-1.875-1.875v-6.198a2.29 2.29 0 0 0 .091-.086L12 5.432Z" />
-      </svg>
-    ),
-  },
-  {
-    id: "pos",
-    label: "Point of Sale",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="currentColor" className="w-4.5 h-4.5">
-        <path d="M2.25 2.25a.75.75 0 0 0 0 1.5h1.386c.17 0 .318.114.362.278l2.558 9.592a3.752 3.752 0 0 0-2.806 3.63c0 .414.336.75.75.75h15.75a.75.75 0 0 0 0-1.5H5.378A2.25 2.25 0 0 1 7.5 15h11.218a.75.75 0 0 0 .674-.421 60.358 60.358 0 0 0 2.96-7.228.75.75 0 0 0-.525-.965A60.864 60.864 0 0 0 5.68 4.509l-.232-.867A1.875 1.875 0 0 0 3.636 2.25H2.25ZM3.75 20.25a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0ZM16.5 20.25a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0Z" />
-      </svg>
-    ),
-  },
-  {
-    id: "inventory",
-    label: "Inventory",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="currentColor" className="w-4.5 h-4.5">
-        <path d="M3.375 3C2.339 3 1.5 3.84 1.5 4.875v.75c0 1.036.84 1.875 1.875 1.875h17.25c1.035 0 1.875-.84 1.875-1.875v-.75C22.5 3.839 21.66 3 20.625 3H3.375Z" />
-        <path fillRule="evenodd" d="m3.087 9 .54 9.176A3 3 0 0 0 6.62 21h10.757a3 3 0 0 0 2.995-2.824L20.913 9H3.087Zm6.163 3.75A.75.75 0 0 1 10 12h4a.75.75 0 0 1 0 1.5h-4a.75.75 0 0 1-.75-.75Z" clipRule="evenodd" />
-      </svg>
-    ),
-  },
-  {
-    id: "reports",
-    label: "Reports",
-    icon: (
-      <svg viewBox="0 0 24 24" fill="currentColor" className="w-4.5 h-4.5">
-        <path fillRule="evenodd" d="M2.25 2.25a.75.75 0 0 0 0 1.5H3v10.5a3 3 0 0 0 3 3h1.21l-1.172 3.513a.75.75 0 0 0 1.424.474l.329-.987h8.418l.33.987a.75.75 0 0 0 1.422-.474l-1.17-3.513H18a3 3 0 0 0 3-3V3.75h.75a.75.75 0 0 0 0-1.5H2.25Zm6.54 15h6.42l.5 1.5H8.29l.5-1.5Zm8.085-8.995a.75.75 0 1 0-.75-1.299 12.81 12.81 0 0 0-3.558 3.05L11.03 8.47a.75.75 0 0 0-1.06 0l-3 3a.75.75 0 1 0 1.06 1.06l2.47-2.47 1.617 1.618a.75.75 0 0 0 1.146-.102 11.312 11.312 0 0 1 3.612-3.321Z" clipRule="evenodd" />
-      </svg>
-    ),
-  },
+type CartItem = Medicine & { quantity: number };
+
+const STORAGE_KEY = "pharmacy_system_state_v1";
+const PIE_COLORS = ["#0d9488", "#6366f1", "#f59e0b", "#ec4899", "#22c55e"];
+
+const navMeta: { id: Page; label: string; area: AccessArea; icon: React.ReactNode }[] = [
+  { id: "dashboard", label: "Dashboard", area: "DASHBOARD", icon: <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M3 10.5 12 3l9 7.5v9.75A1.75 1.75 0 0 1 19.25 21h-4.5v-6h-5.5v6h-4.5A1.75 1.75 0 0 1 3 20.25V10.5Z" /></svg> },
+  { id: "pos", label: "Point of Sale", area: "POS", icon: <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h17A1.5 1.5 0 0 1 22 5.5v2.25a1.5 1.5 0 0 1-1.5 1.5H18v8.25A2.25 2.25 0 0 1 15.75 19H8.25A2.25 2.25 0 0 1 6 16.75V9.25H3.5A1.5 1.5 0 0 1 2 7.75V5.5Zm4 3.75h12v7.5c0 .83-.67 1.5-1.5 1.5h-9a1.5 1.5 0 0 1-1.5-1.5v-7.5Z" /></svg> },
+  { id: "inventory", label: "Inventory", area: "INVENTORY", icon: <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Zm9 2.25 6.75-3.38L12 3.5 5.25 6.37 12 9.75Zm-7.5 3.35 6.75 3.38v4.12l-6.75-3.38v-4.12Zm15 0v4.12l-6.75 3.38v-4.12l6.75-3.38Z" /></svg> },
+  { id: "suppliers", label: "Suppliers", area: "SUPPLIERS", icon: <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M7 4.5A2.5 2.5 0 0 1 9.5 2h5A2.5 2.5 0 0 1 17 4.5v1.25h1.5A2.5 2.5 0 0 1 21 8.25v9A2.75 2.75 0 0 1 18.25 20h-12.5A2.75 2.75 0 0 1 3 17.25v-9A2.5 2.5 0 0 1 5.5 5.75H7V4.5Zm2 1.25h6v1.25H9V5.75Zm-3 2.5h12v8.5a1.25 1.25 0 0 1-1.25 1.25h-9.5A1.25 1.25 0 0 1 6 16.75v-8.5Z" /></svg> },
+  { id: "users", label: "Users", area: "USERS", icon: <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M7.5 9.5A2.5 2.5 0 1 1 7.5 4a2.5 2.5 0 0 1 0 5.5Zm9 0A2.5 2.5 0 1 1 16.5 4a2.5 2.5 0 0 1 0 5.5ZM4 17.5c0-2.21 2.18-4 5.5-4s5.5 1.79 5.5 4v1.5H4v-1.5Zm10 0c0-1.2 1.15-2.5 3-2.5 1.2 0 2.3.34 3.1.95V19H14v-1.5Z" /></svg> },
+  { id: "reports", label: "Reports", area: "REPORTS", icon: <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M5 3.75A1.75 1.75 0 0 1 6.75 2h10.5A1.75 1.75 0 0 1 19 3.75v16.5A1.75 1.75 0 0 1 17.25 22H6.75A1.75 1.75 0 0 1 5 20.25V3.75Zm2.5 3.5h9v1.5h-9v-1.5Zm0 4h9v1.5h-9v-1.5Zm0 4h6v1.5h-6v-1.5Z" /></svg> },
+  { id: "audit", label: "Audit Logs", area: "AUDIT", icon: <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M12 2.25a9.75 9.75 0 1 0 9.75 9.75A9.76 9.76 0 0 0 12 2.25Zm0 4.5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0V7.5A.75.75 0 0 1 12 6.75Zm0 9.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" /></svg> },
 ];
 
-export default function App() {
+const defaultState = seedState();
+
+const loadState = (): PharmacyState => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return defaultState;
+    return JSON.parse(raw) as PharmacyState;
+  } catch {
+    return defaultState;
+  }
+};
+
+function App() {
+  const [state, setState] = useState<PharmacyState>(loadState);
   const [page, setPage] = useState<Page>("dashboard");
-  const [products, setProducts] = useState<Product[]>(PRODUCTS);
-  const [sales, setSales] = useState<SaleRecord[]>(SALES);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [authUser, setAuthUser] = useState<PharmacyUser | null>(null);
+  const [login, setLogin] = useState({ username: "admin", password: "admin123" });
 
-  const lowStockCount = products.filter((p) => p.stock <= p.reorderLevel).length;
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }, [state]);
 
-  const handleSale = (sale: SaleRecord, soldItems: { id: number; qty: number }[]) => {
-    setSales((prev) => [...prev, sale]);
-    setProducts((prev) =>
-      prev.map((p) => {
-        const item = soldItems.find((i) => i.id === p.id);
-        return item ? { ...p, stock: Math.max(0, p.stock - item.qty) } : p;
-      })
+  const loginUser = (username: string, password: string) => {
+    const user = state.users.find(
+      (entry) => entry.username.toLowerCase() === username.toLowerCase() && entry.passwordHash === hashPassword(password) && entry.status === "ACTIVE"
     );
+
+    if (!user) {
+      return false;
+    }
+
+    setAuthUser(user);
+    setState((prev) => ({
+      ...prev,
+      users: prev.users.map((entry) => (entry.id === user.id ? { ...entry, lastLogin: new Date().toISOString() } : entry)),
+      auditLogs: [
+        buildAuditLog({
+          userId: user.id,
+          action: "LOGIN",
+          entityType: "USER",
+          entityId: user.id,
+          success: true,
+          metadata: { username: user.username, ipAddress: "127.0.0.1" },
+        }),
+        ...prev.auditLogs,
+      ].slice(0, 200),
+    }));
+    return true;
   };
 
-  const todayRevenue = sales
-    .filter((s) => s.date === "2026-09-10" && s.status === "completed")
-    .reduce((a, s) => a + s.total, 0);
+  const logout = () => {
+    if (authUser) {
+      setState((prev) => ({
+        ...prev,
+        auditLogs: [
+          buildAuditLog({
+            userId: authUser.id,
+            action: "LOGOUT",
+            entityType: "USER",
+            entityId: authUser.id,
+            success: true,
+            metadata: { username: authUser.username },
+          }),
+          ...prev.auditLogs,
+        ].slice(0, 200),
+      }));
+    }
+    setAuthUser(null);
+  };
 
-  return (
-    <div className="flex h-full bg-[#f8fafc]" style={{ fontFamily: "'Outfit', system-ui, sans-serif" }}>
-      {/* ── Sidebar ── */}
-      <aside
-        className={`fixed inset-y-0 left-0 z-40 w-60 bg-white border-r border-gray-100 flex flex-col transition-transform duration-200 md:relative md:translate-x-0 ${mobileOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full md:translate-x-0"}`}
-        style={{ minWidth: "240px" }}
-      >
-        {/* Logo */}
-        <div className="px-5 py-5 border-b border-gray-50">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-teal-600 rounded-xl flex items-center justify-center shadow-sm flex-shrink-0">
-              <svg viewBox="0 0 24 24" fill="white" className="w-5 h-5">
-                <path d="M11.25 4.533A9.707 9.707 0 0 0 6 3a9.735 9.735 0 0 0-3.25.555.75.75 0 0 0-.5.707v14.25a.75.75 0 0 0 1 .707A8.237 8.237 0 0 1 6 18.75c1.995 0 3.823.707 5.25 1.886V4.533ZM12.75 20.636A8.214 8.214 0 0 1 18 18.75c.966 0 1.89.166 2.75.47a.75.75 0 0 0 1-.708V4.262a.75.75 0 0 0-.5-.707A9.735 9.735 0 0 0 18 3a9.707 9.707 0 0 0-5.25 1.533v16.103Z" />
-              </svg>
+  const currentUser = authUser ?? state.users[0];
+  const visibleNav = navMeta.filter((item) => canAccess(currentUser.role, item.area));
+
+  const lowStockCount = state.medicines.filter((item) => item.quantity <= item.reorderLevel).length;
+  const todayRevenue = state.sales
+    .filter((sale) => sale.transactionDate === "2026-09-10" && sale.status === "COMPLETED")
+    .reduce((sum, sale) => sum + sale.totalAmount, 0);
+
+  if (!authUser) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,_#ecfeff,_#f8fafc_45%,_#f1f5f9)] px-4">
+        <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white/90 p-8 shadow-2xl backdrop-blur">
+          <div className="mb-6 flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-600 text-lg font-bold text-white">P</div>
+            <div>
+              <div className="text-xl font-bold text-slate-900">PharmaSync</div>
+              <div className="text-xs text-slate-500">Pharmacy Management System</div>
             </div>
-            <div className="min-w-0">
-              <p className="font-bold text-gray-900 text-sm leading-tight">PharmaSync</p>
-              <p className="text-[10px] text-gray-400 truncate">HopeMed Pharmacy</p>
+          </div>
+
+          <div className="mb-4">
+            <div className="text-sm font-medium text-slate-500">Username</div>
+            <input
+              value={login.username}
+              onChange={(e) => setLogin((prev) => ({ ...prev, username: e.target.value }))}
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none ring-0 focus:border-teal-500"
+            />
+          </div>
+
+          <div className="mb-6">
+            <div className="text-sm font-medium text-slate-500">Password</div>
+            <input
+              type="password"
+              value={login.password}
+              onChange={(e) => setLogin((prev) => ({ ...prev, password: e.target.value }))}
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none ring-0 focus:border-teal-500"
+            />
+          </div>
+
+          <button
+            onClick={() => {
+              const ok = loginUser(login.username, login.password);
+              if (!ok) {
+                window.alert("Invalid username or password.");
+              }
+            }}
+            className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white shadow hover:bg-teal-500"
+          >
+            Sign in
+          </button>
+
+          <div className="mt-5 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
+            Demo accounts: admin / admin123 · pharmacist / pharma123 · cashier / cashier123
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return <SystemShell {...{ state, setState, page, setPage, mobileOpen, setMobileOpen, currentUser, logout, lowStockCount, todayRevenue, visibleNav }} />;
+}
+
+function SystemShell({
+  state,
+  setState,
+  page,
+  setPage,
+  mobileOpen,
+  setMobileOpen,
+  currentUser,
+  logout,
+  lowStockCount,
+  todayRevenue,
+  visibleNav,
+}: {
+  state: PharmacyState;
+  setState: React.Dispatch<React.SetStateAction<PharmacyState>>;
+  page: Page;
+  setPage: React.Dispatch<React.SetStateAction<Page>>;
+  mobileOpen: boolean;
+  setMobileOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  currentUser: PharmacyUser;
+  logout: () => void;
+  lowStockCount: number;
+  todayRevenue: number;
+  visibleNav: { id: Page; label: string; area: AccessArea; icon: React.ReactNode }[];
+}) {
+  return (
+    <div className="flex h-screen bg-slate-100 text-slate-800">
+      <aside className={`fixed inset-y-0 left-0 z-40 w-64 border-r border-slate-200 bg-white shadow-sm transition-transform duration-200 md:relative md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
+        <div className="flex items-center justify-between border-b border-slate-100 p-5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-600 text-sm font-bold text-white">P</div>
+            <div>
+              <div className="text-sm font-bold text-slate-900">PharmaSync</div>
+              <div className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Operations</div>
             </div>
           </div>
         </div>
 
-        {/* Today's snapshot */}
-        <div className="mx-3 mt-4 mb-1 bg-gradient-to-br from-teal-500 to-teal-700 rounded-2xl p-4 text-white">
-          <p className="text-[10px] font-semibold opacity-70 mb-1 uppercase tracking-wider">Today's Revenue</p>
-          <p className="text-xl font-bold">{fmt(todayRevenue)}</p>
-          <p className="text-[10px] opacity-60 mt-0.5">Sep 10, 2026</p>
+        <div className="mx-3 mt-4 rounded-2xl bg-gradient-to-r from-teal-600 to-cyan-600 p-4 text-white shadow-lg">
+          <div className="text-[10px] uppercase tracking-[0.22em] text-teal-100">Today</div>
+          <div className="mt-1 text-2xl font-bold">{fmt(todayRevenue)}</div>
+          <div className="mt-1 text-xs text-teal-100">Sales captured {state.sales.filter((sale) => sale.transactionDate === "2026-09-10").length} transactions</div>
         </div>
 
-        {/* Nav */}
-        <nav className="flex-1 px-3 py-2 space-y-0.5 overflow-y-auto">
-          <p className="text-[9px] font-bold text-gray-300 uppercase tracking-widest px-3 py-2">Main Menu</p>
-          {NAV.map((n) => (
+        <nav className="space-y-1 p-3">
+          {visibleNav.map((item) => (
             <button
-              key={n.id}
-              onClick={() => { setPage(n.id); setMobileOpen(false); }}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${page === n.id ? "bg-teal-50 text-teal-700 shadow-sm" : "text-gray-500 hover:bg-gray-50 hover:text-gray-800"}`}
+              key={item.id}
+              onClick={() => {
+                setPage(item.id);
+                setMobileOpen(false);
+              }}
+              className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition ${page === item.id ? "bg-teal-50 text-teal-700" : "text-slate-600 hover:bg-slate-100"}`}
             >
-              <span className={page === n.id ? "text-teal-600" : ""}>{n.icon}</span>
-              {n.label}
-              {n.id === "inventory" && lowStockCount > 0 && (
-                <span className="ml-auto text-[9px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">{lowStockCount}</span>
-              )}
+              <span className="flex items-center gap-3">
+                <span className="text-current">{item.icon}</span>
+                {item.label}
+              </span>
+              {item.id === "inventory" && lowStockCount > 0 && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">{lowStockCount}</span>}
             </button>
           ))}
         </nav>
 
-        {/* User */}
-        <div className="p-4 border-t border-gray-50">
-          <div className="flex items-center gap-3 px-1">
-            <div className="w-8 h-8 bg-teal-100 rounded-full flex items-center justify-center flex-shrink-0">
-              <span className="text-teal-700 text-xs font-bold">MS</span>
+        <div className="absolute bottom-0 left-0 right-0 border-t border-slate-200 bg-white p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-700">
+                {currentUser.fullName
+                  .split(" ")
+                  .map((part) => part[0])
+                  .slice(0, 2)
+                  .join("")}
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-slate-800">{currentUser.fullName}</div>
+                <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{currentUser.role}</div>
+              </div>
             </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-gray-800 truncate">Maria Santos</p>
-              <p className="text-[10px] text-gray-400">Cashier · Active</p>
-            </div>
-            <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full flex-shrink-0" />
+            <button onClick={logout} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100">Logout</button>
           </div>
         </div>
       </aside>
 
-      {/* Mobile backdrop */}
-      {mobileOpen && (
-        <div className="fixed inset-0 bg-black/20 z-30 md:hidden" onClick={() => setMobileOpen(false)} />
-      )}
+      {mobileOpen && <div className="fixed inset-0 z-30 bg-black/30 md:hidden" onClick={() => setMobileOpen(false)} />}
 
-      {/* ── Main ── */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Mobile topbar */}
-        <header className="md:hidden flex items-center justify-between px-4 py-3 bg-white border-b border-gray-100 shadow-sm">
-          <button onClick={() => setMobileOpen(true)} className="text-gray-500 hover:text-gray-800 transition-colors">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-            </svg>
-          </button>
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-teal-600 rounded-lg flex items-center justify-center">
-              <svg viewBox="0 0 24 24" fill="white" className="w-3.5 h-3.5"><path d="M11.25 4.533A9.707 9.707 0 0 0 6 3a9.735 9.735 0 0 0-3.25.555.75.75 0 0 0-.5.707v14.25a.75.75 0 0 0 1 .707A8.237 8.237 0 0 1 6 18.75c1.995 0 3.823.707 5.25 1.886V4.533ZM12.75 20.636A8.214 8.214 0 0 1 18 18.75c.966 0 1.89.166 2.75.47a.75.75 0 0 0 1-.708V4.262a.75.75 0 0 0-.5-.707A9.735 9.735 0 0 0 18 3a9.707 9.707 0 0 0-5.25 1.533v16.103Z"/></svg>
+      <main className="flex-1 overflow-hidden">
+        <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 md:px-6">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setMobileOpen(true)} className="rounded-lg border border-slate-200 p-2 text-slate-600 md:hidden">
+              <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4"><path d="M3 6h18v2H3V6Zm0 5h18v2H3v-2Zm0 5h18v2H3v-2Z" /></svg>
+            </button>
+            <div>
+              <div className="text-xl font-bold text-slate-900">{page === "dashboard" ? "Dashboard" : page === "pos" ? "Point of Sale" : page === "inventory" ? "Inventory" : page === "suppliers" ? "Suppliers" : page === "users" ? "Users" : page === "audit" ? "Audit Logs" : "Reports"}</div>
+              <div className="text-xs text-slate-500">Pharmacy operations overview</div>
             </div>
-            <span className="font-bold text-gray-900 text-sm">PharmaSync</span>
           </div>
-          <div className="w-5" />
+          <div className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">System Online</div>
         </header>
 
-        {/* Page Content */}
-        <main className={`flex-1 overflow-hidden ${page === "pos" ? "flex flex-col" : "overflow-auto"}`}>
-          {page === "dashboard" && <Dashboard products={products} sales={sales} />}
-          {page === "pos" && (
-            <div className="flex-1 overflow-hidden flex">
-              <POS products={products} onSale={handleSale} />
+        <div className="h-[calc(100%-73px)] overflow-auto p-4 md:p-6">
+          {page === "dashboard" && <DashboardPage state={state} />}
+          {page === "pos" && <PosPage state={state} setState={setState} user={currentUser} />}
+          {page === "inventory" && <InventoryPage state={state} setState={setState} />}
+          {page === "suppliers" && <SuppliersPage state={state} setState={setState} />}
+          {page === "users" && currentUser.role === "ADMIN" && <UsersPage state={state} setState={setState} />}
+          {page === "audit" && currentUser.role === "ADMIN" && <AuditPage logs={state.auditLogs} />}
+          {page === "reports" && <ReportsPage state={state} />}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function DashboardPage({ state }: { state: PharmacyState }) {
+  const todaySales = state.sales.filter((sale) => sale.transactionDate === "2026-09-10");
+  const totalRevenue = todaySales.reduce((sum, sale) => sum + sale.totalAmount, 0);
+  const lowStock = state.medicines.filter((item) => item.quantity <= item.reorderLevel);
+  const expiringSoon = state.medicines.filter((item) => {
+    const days = (new Date(item.expirationDate).getTime() - new Date("2026-09-10").getTime()) / 86400000;
+    return days <= 90 && days > 0;
+  });
+
+  const paymentBreakdown = Object.entries(
+    todaySales.reduce<Record<string, number>>((acc, sale) => {
+      acc[sale.paymentMethod] = (acc[sale.paymentMethod] ?? 0) + sale.totalAmount;
+      return acc;
+    }, {})
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard title="Today's Revenue" value={fmt(totalRevenue)} sub={`${todaySales.length} transactions`} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm3.25 10.07H12.75v3.18h-1.5v-3.18H8.75v-1.5h2.5V7.93h1.5v3.14h2.5v1.5Z" /></svg>} accent="bg-emerald-50 text-emerald-600" />
+        <StatCard title="Medicines" value={String(state.medicines.length)} sub={`${state.medicines.filter((m) => m.quantity > 0).length} active`} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-9Zm3 2.5h10v2H7V10Zm0 4h7v2H7v-2Z" /></svg>} accent="bg-sky-50 text-sky-600" />
+        <StatCard title="Low Stock" value={String(lowStock.length)} sub="Need reorder" icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm0 15a1.25 1.25 0 1 1 1.25-1.25A1.25 1.25 0 0 1 12 17.5Zm1.75-5.75h-3.5V7.5h3.5v4.25Z" /></svg>} accent="bg-amber-50 text-amber-600" />
+        <StatCard title="Expiring Soon" value={String(expiringSoon.length)} sub="Under 90 days" icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M5.5 15.5A6.5 6.5 0 1 1 18.5 15.5a6.5 6.5 0 0 1-13 0Zm7-8.25v6h2v1.5h-3.5v-7.5h1.5Z" /></svg>} accent="bg-rose-50 text-rose-600" />
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-5 flex items-center justify-between">
+            <div>
+              <div className="text-sm font-bold text-slate-900">Weekly Revenue</div>
+              <div className="text-xs text-slate-500">Last 7 days</div>
             </div>
-          )}
-          {page === "inventory" && <Inventory products={products} setProducts={setProducts} />}
-          {page === "reports" && <Reports sales={sales} products={products} />}
-        </main>
+            <div className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">+12.4%</div>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={WEEKLY_SALES}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+              <XAxis dataKey="day" tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(value) => `₱${value / 1000}k`} />
+              <Tooltip formatter={(value: number) => fmt(value)} />
+              <Bar dataKey="revenue" radius={[8, 8, 0, 0]} fill="#0d9488" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-5 text-sm font-bold text-slate-900">Payment Mix</div>
+          <ResponsiveContainer width="100%" height={220}>
+            <PieChart>
+              <Pie data={paymentBreakdown.map(([name, value]) => ({ name, value }))} dataKey="value" innerRadius={45} outerRadius={75} paddingAngle={3}>
+                {paymentBreakdown.map((entry, index) => <Cell key={entry[0]} fill={PIE_COLORS[index % PIE_COLORS.length]} />)}
+              </Pie>
+              <Tooltip formatter={(value: number) => fmt(value)} />
+              <Legend />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center justify-between border-b border-slate-100 p-4">
+            <div className="text-sm font-bold text-slate-900">Recent Sales</div>
+            <div className="text-xs text-slate-500">Today</div>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {todaySales.slice().reverse().map((sale) => (
+              <div key={sale.id} className="flex items-center justify-between gap-3 p-4">
+                <div>
+                  <div className="text-sm font-semibold text-slate-800">{sale.id}</div>
+                  <div className="text-xs text-slate-500">{sale.transactionTime} · {sale.cashierName}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm font-bold text-slate-900">{fmt(sale.totalAmount)}</div>
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{sale.paymentMethod}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center justify-between border-b border-slate-100 p-4">
+            <div className="text-sm font-bold text-slate-900">Stock Alerts</div>
+            <div className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-700">{lowStock.length} items</div>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {lowStock.length === 0 ? (
+              <div className="p-4 text-sm text-slate-400">No stock alerts at the moment.</div>
+            ) : (
+              lowStock.map((item) => (
+                <div key={item.id} className="flex items-center justify-between p-4">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-800">{item.brandName}</div>
+                    <div className="text-xs text-slate-500">Reorder: {item.reorderLevel}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-bold text-amber-700">{item.quantity}</div>
+                    <div className="text-[10px] text-slate-400">units left</div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
 }
+
+function PosPage({ state, setState, user }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>>; user: PharmacyUser }) {
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("All");
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [paymentMethod, setPaymentMethod] = useState("Cash");
+  const [discount, setDiscount] = useState("0");
+  const [amountReceived, setAmountReceived] = useState("0");
+  const [receipt, setReceipt] = useState<SaleRecord | null>(null);
+
+  const items = state.medicines.filter((medicine) => {
+    const matchCategory = category === "All" || medicine.medicineType === category;
+    const matchSearch = [medicine.brandName, medicine.genericName, medicine.barcode].some((field) => field.toLowerCase().includes(search.toLowerCase()));
+    return matchCategory && matchSearch && medicine.quantity > 0;
+  });
+
+  const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+  const discountValue = Number(discount || 0);
+  const taxValue = Number((subtotal * 0.1).toFixed(2));
+  const total = Number(Math.max(0, subtotal - discountValue + taxValue).toFixed(2));
+  const change = Number((Number(amountReceived || 0) - total).toFixed(2));
+
+  const addToCart = (medicine: Medicine) => {
+    setCart((prev) => {
+      const existing = prev.find((item) => item.id === medicine.id);
+      if (existing) {
+        return prev.map((item) => (item.id === medicine.id ? { ...item, quantity: Math.min(item.quantity + 1, medicine.quantity) } : item));
+      }
+      return [...prev, { ...medicine, quantity: 1 }];
+    });
+  };
+
+  const updateCartQty = (medicineId: string, nextQty: number) => {
+    setCart((prev) =>
+      prev.flatMap((item) => {
+        if (item.id !== medicineId) return [item];
+        const safeValue = Math.max(1, nextQty);
+        return [{ ...item, quantity: safeValue }];
+      })
+    );
+  };
+
+  const removeFromCart = (medicineId: string) => setCart((prev) => prev.filter((item) => item.id !== medicineId));
+
+  const submitSale = () => {
+    if (!cart.length) return;
+    if (Number(amountReceived || 0) < total && paymentMethod === "Cash") {
+      window.alert("Cash amount must cover the total.");
+      return;
+    }
+
+    const saleId = `TXN-${Date.now().toString().slice(-6)}`;
+    const sale: SaleRecord = {
+      id: saleId,
+      cashierId: user.id,
+      cashierName: user.fullName,
+      transactionDate: "2026-09-10",
+      transactionTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
+      subtotal,
+      discount: discountValue,
+      tax: taxValue,
+      totalAmount: total,
+      paymentMethod,
+      amountReceived: Number(amountReceived || total),
+      changeAmount: paymentMethod === "Cash" ? Number(Math.max(0, change).toFixed(2)) : 0,
+      status: "COMPLETED",
+      items: cart.map((item) => ({
+        medicineId: item.id,
+        medicineName: item.brandName,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        subtotal: Number((item.unitPrice * item.quantity).toFixed(2)),
+      })),
+    };
+
+    setState((prev) => {
+      const nextMedicines = prev.medicines.map((medicine) => {
+        const item = cart.find((entry) => entry.id === medicine.id);
+        if (!item) return medicine;
+        const newQty = Math.max(0, medicine.quantity - item.quantity);
+        return { ...medicine, quantity: newQty, updatedAt: new Date().toISOString() };
+      });
+
+      const nextInventory = prev.inventoryTransactions.concat(
+        cart.map((item) => ({
+          id: `INV-${Date.now()}-${item.id}`,
+          medicineId: item.id,
+          transactionType: "SALE",
+          quantity: item.quantity,
+          previousQuantity: prev.medicines.find((m) => m.id === item.id)?.quantity ?? 0,
+          resultingQuantity: Math.max(0, (prev.medicines.find((m) => m.id === item.id)?.quantity ?? 0) - item.quantity),
+          referenceId: saleId,
+          performedBy: user.id,
+          timestamp: new Date().toISOString(),
+          notes: `POS sale ${saleId}`,
+        }))
+      );
+
+      return {
+        ...prev,
+        medicines: nextMedicines,
+        sales: [sale, ...prev.sales],
+        inventoryTransactions: nextInventory,
+        auditLogs: [
+          buildAuditLog({
+            userId: user.id,
+            action: "SALE_COMPLETED",
+            entityType: "SALE",
+            entityId: saleId,
+            success: true,
+            metadata: { total: total, paymentMethod },
+          }),
+          ...prev.auditLogs,
+        ].slice(0, 200),
+      };
+    });
+
+    setReceipt(sale);
+    setCart([]);
+    setDiscount("0");
+    setAmountReceived("0");
+    setPaymentMethod("Cash");
+  };
+
+  if (receipt) {
+    return (
+      <div className="flex min-h-full items-center justify-center bg-slate-50 p-6">
+        <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white shadow-xl">
+          <div className="rounded-t-3xl bg-teal-600 px-6 py-6 text-center text-white">
+            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-white/20 text-xl">✓</div>
+            <div className="text-lg font-bold">Payment Confirmed</div>
+            <div className="text-xs text-teal-100">{receipt.id}</div>
+          </div>
+          <div className="space-y-3 p-5">
+            {receipt.items.map((item) => (
+              <div key={item.medicineId} className="flex items-center justify-between text-sm">
+                <span className="text-slate-600">{item.medicineName} × {item.quantity}</span>
+                <span className="font-semibold text-slate-800">{fmt(item.subtotal)}</span>
+              </div>
+            ))}
+            <div className="rounded-xl bg-slate-50 p-3 text-sm">
+              <div className="flex justify-between text-slate-600"><span>Subtotal</span><span>{fmt(receipt.subtotal)}</span></div>
+              <div className="flex justify-between text-slate-600"><span>Discount</span><span>-{fmt(receipt.discount)}</span></div>
+              <div className="flex justify-between font-bold text-slate-900"><span>Total</span><span>{fmt(receipt.totalAmount)}</span></div>
+            </div>
+            <button onClick={() => setReceipt(null)} className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white hover:bg-teal-500">New transaction</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid h-full gap-5 xl:grid-cols-[1.5fr_0.9fr]">
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-100 p-4">
+          <div className="mb-3 flex items-center gap-3">
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search medicines or scan barcode" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm focus:border-teal-500" />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {['All', 'Antibiotics', 'Analgesics', 'Cardiovascular', 'Diabetes', 'Antihistamine', 'Antacids', 'Vitamins', 'Respiratory', 'Dermatology'].map((filter) => (
+              <button key={filter} onClick={() => setCategory(filter)} className={`rounded-full px-3 py-1.5 text-xs font-medium ${category === filter ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                {filter}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
+          {items.map((medicine) => (
+            <button key={medicine.id} onClick={() => addToCart(medicine)} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left shadow-sm hover:border-teal-300 hover:bg-white">
+              <div className="mb-3 flex items-center justify-between">
+                <span className="rounded-full bg-teal-50 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-teal-700">{medicine.medicineType}</span>
+                <span className="text-[10px] text-slate-500">{medicine.quantity} left</span>
+              </div>
+              <div className="text-sm font-bold text-slate-800">{medicine.brandName}</div>
+              <div className="mt-1 text-xs text-slate-500">{medicine.genericName}</div>
+              <div className="mt-4 flex items-center justify-between">
+                <span className="text-lg font-bold text-teal-700">{fmt(medicine.unitPrice)}</span>
+                <span className="text-[10px] text-slate-500">{medicine.dosageForm}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-slate-100 p-4">
+          <div>
+            <div className="text-sm font-bold text-slate-900">Current Order</div>
+            <div className="text-xs text-slate-500">{cart.length} items</div>
+          </div>
+          {cart.length > 0 && <button onClick={() => setCart([])} className="text-xs font-semibold text-red-500">Clear</button>}
+        </div>
+
+        <div className="max-h-[420px] space-y-3 overflow-y-auto p-4">
+          {cart.length === 0 ? (
+            <div className="flex h-48 items-center justify-center text-center text-sm text-slate-400">No items added yet.</div>
+          ) : cart.map((item) => (
+            <div key={item.id} className="rounded-xl border border-slate-200 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-slate-800">{item.brandName}</div>
+                  <div className="text-[10px] text-slate-500">{fmt(item.unitPrice)} each</div>
+                </div>
+                <button onClick={() => removeFromCart(item.id)} className="text-xs font-medium text-red-500">Remove</button>
+              </div>
+              <div className="mt-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <button onClick={() => updateCartQty(item.id, item.quantity - 1)} className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-sm">-</button>
+                  <input value={item.quantity} onChange={(e) => updateCartQty(item.id, Number(e.target.value || 1))} className="w-12 border border-slate-200 px-2 py-1 text-center text-sm" />
+                  <button onClick={() => updateCartQty(item.id, item.quantity + 1)} className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-sm">+</button>
+                </div>
+                <div className="text-sm font-bold text-slate-800">{fmt(item.unitPrice * item.quantity)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="space-y-3 border-t border-slate-100 bg-slate-50 p-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Payment</label>
+              <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
+                {['Cash', 'GCash', 'Maya', 'Card'].map((method) => <option key={method}>{method}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Discount</label>
+              <input value={discount} onChange={(e) => setDiscount(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
+            </div>
+          </div>
+          {paymentMethod === 'Cash' && (
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Tendered</label>
+              <input value={amountReceived} onChange={(e) => setAmountReceived(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
+            </div>
+          )}
+
+          <div className="space-y-2 text-sm text-slate-700">
+            <div className="flex items-center justify-between"><span>Subtotal</span><span>{fmt(subtotal)}</span></div>
+            <div className="flex items-center justify-between"><span>Tax</span><span>{fmt(taxValue)}</span></div>
+            <div className="flex items-center justify-between"><span>Discount</span><span>-{fmt(discountValue)}</span></div>
+            <div className="flex items-center justify-between text-base font-bold text-slate-900"><span>Total</span><span>{fmt(total)}</span></div>
+            {paymentMethod === 'Cash' && <div className="flex items-center justify-between text-sm"><span>Change</span><span>{fmt(change)}</span></div>}
+          </div>
+
+          <button onClick={submitSale} className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white hover:bg-teal-500">Complete sale</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InventoryPage({ state, setState }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>> }) {
+  const [search, setSearch] = useState("");
+  const [modal, setModal] = useState<{ mode: "Add" | "Edit"; item?: Medicine } | null>(null);
+  const [draft, setDraft] = useState<Partial<Medicine>>({});
+
+  const filtered = state.medicines.filter((medicine) => {
+    const q = search.toLowerCase();
+    return [medicine.brandName, medicine.genericName, medicine.barcode, medicine.batchNumber].some((field) => field.toLowerCase().includes(q));
+  });
+
+  const openAdd = () => {
+    setDraft({
+      barcode: "",
+      genericName: "",
+      brandName: "",
+      medicineType: "Antibiotic",
+      dosageForm: "Tablet",
+      strength: "500mg",
+      prescriptionRequired: false,
+      description: "",
+      dosageInformation: "Reference information only: consult a licensed professional before use.",
+      precautions: "Reference information only: follow label and guidance from a professional.",
+      contraindications: "Reference information only: avoid using without professional advice when contraindicated.",
+      storageInformation: "Store in a cool, dry place.",
+      supplierId: state.suppliers[0]?.id ?? "",
+      unitPrice: 0,
+      quantity: 0,
+      reorderLevel: 10,
+      expirationDate: "2027-01-01",
+      batchNumber: "",
+      status: "ACTIVE",
+    });
+    setModal({ mode: "Add" });
+  };
+
+  const openEdit = (item: Medicine) => {
+    setDraft(item);
+    setModal({ mode: "Edit", item });
+  };
+
+  const saveItem = () => {
+    if (!draft.brandName || !draft.genericName || !draft.barcode || !draft.batchNumber || !draft.expirationDate) {
+      window.alert("Please complete all required fields.");
+      return;
+    }
+
+    if (modal?.mode === "Edit" && modal.item) {
+      setState((prev) => ({
+        ...prev,
+        medicines: prev.medicines.map((medicine) => (medicine.id === modal.item!.id ? { ...medicine, ...draft, updatedAt: new Date().toISOString() } : medicine)),
+        auditLogs: [
+          buildAuditLog({ userId: state.users[0].id, action: "UPDATE_MEDICINE", entityType: "MEDICINE", entityId: modal.item!.id, success: true, metadata: { brandName: draft.brandName } }),
+          ...prev.auditLogs,
+        ].slice(0, 200),
+      }));
+    } else {
+      const newItem: Medicine = {
+        id: `med-${Date.now()}`,
+        barcode: String(draft.barcode ?? ""),
+        genericName: String(draft.genericName ?? ""),
+        brandName: String(draft.brandName ?? ""),
+        medicineType: String(draft.medicineType ?? "Antibiotic"),
+        dosageForm: String(draft.dosageForm ?? "Tablet"),
+        strength: String(draft.strength ?? "500mg"),
+        prescriptionRequired: Boolean(draft.prescriptionRequired),
+        description: String(draft.description ?? ""),
+        dosageInformation: String(draft.dosageInformation ?? "Reference information only: consult a licensed professional."),
+        precautions: String(draft.precautions ?? "Reference information only: follow label instructions."),
+        contraindications: String(draft.contraindications ?? "Reference information only: seek professional advice."),
+        storageInformation: String(draft.storageInformation ?? "Store in a cool, dry place."),
+        supplierId: String(draft.supplierId ?? state.suppliers[0]?.id ?? ""),
+        unitPrice: Number(draft.unitPrice ?? 0),
+        quantity: Number(draft.quantity ?? 0),
+        reorderLevel: Number(draft.reorderLevel ?? 10),
+        expirationDate: String(draft.expirationDate ?? "2027-01-01"),
+        batchNumber: String(draft.batchNumber ?? ""),
+        status: "ACTIVE",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      setState((prev) => ({
+        ...prev,
+        medicines: [newItem, ...prev.medicines],
+        auditLogs: [
+          buildAuditLog({ userId: state.users[0].id, action: "CREATE_MEDICINE", entityType: "MEDICINE", entityId: newItem.id, success: true, metadata: { brandName: newItem.brandName } }),
+          ...prev.auditLogs,
+        ].slice(0, 200),
+      }));
+    }
+
+    setModal(null);
+    setDraft({});
+  };
+
+  const deleteItem = (itemId: string) => {
+    setState((prev) => ({
+      ...prev,
+      medicines: prev.medicines.filter((medicine) => medicine.id !== itemId),
+      auditLogs: [
+        buildAuditLog({ userId: state.users[0].id, action: "DELETE_MEDICINE", entityType: "MEDICINE", entityId: itemId, success: true, metadata: { softDelete: true } }),
+        ...prev.auditLogs,
+      ].slice(0, 200),
+    }));
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div className="text-xl font-bold text-slate-900">Inventory</div>
+          <div className="text-sm text-slate-500">{state.medicines.length} medicine records tracked</div>
+        </div>
+        <button onClick={openAdd} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-bold text-white shadow hover:bg-teal-500">Add medicine</button>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by medicine name, barcode, batch, supplier" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="bg-slate-50 text-slate-600">
+              <tr>
+                <th className="px-4 py-3">Medicine</th>
+                <th className="px-4 py-3">Type</th>
+                <th className="px-4 py-3">Stock</th>
+                <th className="px-4 py-3">Price</th>
+                <th className="px-4 py-3">Expiry</th>
+                <th className="px-4 py-3">Batch</th>
+                <th className="px-4 py-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filtered.map((medicine) => (
+                <tr key={medicine.id} className="hover:bg-slate-50">
+                  <td className="px-4 py-3">
+                    <div className="text-sm font-semibold text-slate-800">{medicine.brandName}</div>
+                    <div className="text-xs text-slate-500">{medicine.genericName}</div>
+                  </td>
+                  <td className="px-4 py-3"><span className="rounded-full bg-teal-50 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-teal-700">{medicine.medicineType}</span></td>
+                  <td className="px-4 py-3">
+                    <div className="text-sm font-bold text-slate-800">{medicine.quantity}</div>
+                    <div className="text-[10px] text-slate-500">reorder {medicine.reorderLevel}</div>
+                  </td>
+                  <td className="px-4 py-3 text-sm font-semibold text-slate-800">{fmt(medicine.unitPrice)}</td>
+                  <td className="px-4 py-3 text-xs text-slate-600">{medicine.expirationDate}</td>
+                  <td className="px-4 py-3 text-xs text-slate-600">{medicine.batchNumber}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-2">
+                      <button onClick={() => openEdit(medicine)} className="text-xs font-semibold text-teal-700">Edit</button>
+                      <button onClick={() => deleteItem(medicine.id)} className="text-xs font-semibold text-red-500">Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {modal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 p-5">
+              <div className="text-lg font-bold text-slate-900">{modal.mode} Medicine</div>
+              <button onClick={() => setModal(null)} className="text-slate-400">✕</button>
+            </div>
+            <div className="grid gap-4 p-5 md:grid-cols-2">
+              <Field label="Brand name" value={draft.brandName ?? ""} onChange={(value) => setDraft({ ...draft, brandName: value })} />
+              <Field label="Generic name" value={draft.genericName ?? ""} onChange={(value) => setDraft({ ...draft, genericName: value })} />
+              <Field label="Barcode" value={draft.barcode ?? ""} onChange={(value) => setDraft({ ...draft, barcode: value })} />
+              <Field label="Batch" value={draft.batchNumber ?? ""} onChange={(value) => setDraft({ ...draft, batchNumber: value })} />
+              <Field label="Strength" value={draft.strength ?? ""} onChange={(value) => setDraft({ ...draft, strength: value })} />
+              <Field label="Price" type="number" value={String(draft.unitPrice ?? 0)} onChange={(value) => setDraft({ ...draft, unitPrice: Number(value) })} />
+              <Field label="Quantity" type="number" value={String(draft.quantity ?? 0)} onChange={(value) => setDraft({ ...draft, quantity: Number(value) })} />
+              <Field label="Reorder level" type="number" value={String(draft.reorderLevel ?? 10)} onChange={(value) => setDraft({ ...draft, reorderLevel: Number(value) })} />
+              <Field label="Expiration date" type="date" value={draft.expirationDate ?? "2027-01-01"} onChange={(value) => setDraft({ ...draft, expirationDate: value })} />
+              <div>
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Supplier</div>
+                <select value={draft.supplierId ?? state.suppliers[0]?.id ?? ""} onChange={(e) => setDraft({ ...draft, supplierId: e.target.value })} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm">
+                  {state.suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.supplierName}</option>)}
+                </select>
+              </div>
+              <div>
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Medicine type</div>
+                <select value={draft.medicineType ?? "Antibiotic"} onChange={(e) => setDraft({ ...draft, medicineType: e.target.value })} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm">
+                  {['Antibiotic', 'Analgesic', 'Cardiovascular', 'Diabetes', 'Antihistamine', 'Antacid', 'Vitamin', 'Respiratory', 'Dermatology'].map((type) => <option key={type}>{type}</option>)}
+                </select>
+              </div>
+              <div>
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Dosage form</div>
+                <select value={draft.dosageForm ?? "Tablet"} onChange={(e) => setDraft({ ...draft, dosageForm: e.target.value })} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm">
+                  {['Tablet', 'Capsule', 'Syrup', 'Injection', 'Cream', 'Inhaler'].map((type) => <option key={type}>{type}</option>)}
+                </select>
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Description</label>
+                <textarea value={draft.description ?? ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" rows={3} />
+              </div>
+              <div className="md:col-span-2 flex items-center gap-3">
+                <input type="checkbox" checked={Boolean(draft.prescriptionRequired)} onChange={(e) => setDraft({ ...draft, prescriptionRequired: e.target.checked })} />
+                <span className="text-sm text-slate-700">Prescription required</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 border-t border-slate-100 p-5">
+              <button onClick={() => setModal(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button>
+              <button onClick={saveItem} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-teal-500">Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SuppliersPage({ state, setState }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>> }) {
+  const [draft, setDraft] = useState<Partial<Supplier>>({});
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const save = () => {
+    if (!draft.supplierName || !draft.phone) {
+      window.alert("Supplier name and phone are required.");
+      return;
+    }
+
+    if (editingId) {
+      setState((prev) => ({
+        ...prev,
+        suppliers: prev.suppliers.map((supplier) => supplier.id === editingId ? { ...supplier, ...draft, updatedAt: new Date().toISOString() } : supplier),
+      }));
+    } else {
+      const next: Supplier = {
+        id: `sup-${Date.now()}`,
+        supplierName: String(draft.supplierName),
+        contactPerson: String(draft.contactPerson ?? ""),
+        phone: String(draft.phone),
+        email: String(draft.email ?? ""),
+        address: String(draft.address ?? ""),
+        status: "ACTIVE",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      setState((prev) => ({ ...prev, suppliers: [next, ...prev.suppliers] }));
+    }
+    setDraft({});
+    setEditingId(null);
+  };
+
+  const remove = (id: string) => {
+    setState((prev) => ({ ...prev, suppliers: prev.suppliers.filter((supplier) => supplier.id !== id) }));
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-4 text-lg font-bold text-slate-900">Add supplier</div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <Field label="Supplier name" value={draft.supplierName ?? ""} onChange={(value) => setDraft({ ...draft, supplierName: value })} />
+          <Field label="Contact person" value={draft.contactPerson ?? ""} onChange={(value) => setDraft({ ...draft, contactPerson: value })} />
+          <Field label="Phone" value={draft.phone ?? ""} onChange={(value) => setDraft({ ...draft, phone: value })} />
+          <Field label="Email" value={draft.email ?? ""} onChange={(value) => setDraft({ ...draft, email: value })} />
+          <div className="md:col-span-2">
+            <Field label="Address" value={draft.address ?? ""} onChange={(value) => setDraft({ ...draft, address: value })} />
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end gap-3">
+          {editingId && <button onClick={() => { setDraft({}); setEditingId(null); }} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button>}
+          <button onClick={save} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-teal-500">{editingId ? "Update supplier" : "Save supplier"}</button>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-100 p-4 text-sm font-bold text-slate-900">Supplier list</div>
+        <div className="divide-y divide-slate-100">
+          {state.suppliers.map((supplier) => (
+            <div key={supplier.id} className="flex flex-col gap-2 p-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <div className="text-sm font-semibold text-slate-800">{supplier.supplierName}</div>
+                <div className="text-xs text-slate-500">{supplier.contactPerson} · {supplier.phone}</div>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => { setDraft(supplier); setEditingId(supplier.id); }} className="text-xs font-semibold text-teal-700">Edit</button>
+                <button onClick={() => remove(supplier.id)} className="text-xs font-semibold text-red-500">Delete</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UsersPage({ state, setState }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>> }) {
+  const [draft, setDraft] = useState<Partial<PharmacyUser & { password: string }>>({ password: "" });
+
+  const save = () => {
+    if (!draft.username || !draft.fullName || !draft.email) {
+      window.alert("Username, full name and email are required.");
+      return;
+    }
+    const nextUser: PharmacyUser = {
+      id: `u-${Date.now()}`,
+      username: String(draft.username),
+      passwordHash: hashPassword(String(draft.password ?? "welcome123")),
+      fullName: String(draft.fullName),
+      role: (draft.role as UserRole) ?? "CASHIER",
+      email: String(draft.email),
+      status: "ACTIVE",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      lastLogin: null,
+    };
+
+    setState((prev) => ({ ...prev, users: [nextUser, ...prev.users] }));
+    setDraft({ password: "" });
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-4 text-lg font-bold text-slate-900">Create user</div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <Field label="Username" value={draft.username ?? ""} onChange={(value) => setDraft({ ...draft, username: value })} />
+          <Field label="Full name" value={draft.fullName ?? ""} onChange={(value) => setDraft({ ...draft, fullName: value })} />
+          <Field label="Email" value={draft.email ?? ""} onChange={(value) => setDraft({ ...draft, email: value })} />
+          <Field label="Password" type="password" value={draft.password ?? ""} onChange={(value) => setDraft({ ...draft, password: value })} />
+          <div>
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Role</div>
+            <select value={draft.role ?? "CASHIER"} onChange={(e) => setDraft({ ...draft, role: e.target.value as UserRole })} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm">
+              {['ADMIN', 'PHARMACIST', 'CASHIER'].map((role) => <option key={role}>{role}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end">
+          <button onClick={save} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-teal-500">Create account</button>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-100 p-4 text-sm font-bold text-slate-900">User roster</div>
+        <div className="divide-y divide-slate-100">
+          {state.users.map((user) => (
+            <div key={user.id} className="flex items-center justify-between p-4">
+              <div>
+                <div className="text-sm font-semibold text-slate-800">{user.fullName}</div>
+                <div className="text-xs text-slate-500">{user.username} · {user.role}</div>
+              </div>
+              <div className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-slate-700">{user.status}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AuditPage({ logs }: { logs: AuditLog[] }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-100 p-4 text-sm font-bold text-slate-900">Audit trail</div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full text-left text-sm">
+          <thead className="bg-slate-50 text-slate-600">
+            <tr>
+              <th className="px-4 py-3">Action</th>
+              <th className="px-4 py-3">Entity</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Timestamp</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {logs.map((log) => (
+              <tr key={log.id}>
+                <td className="px-4 py-3 font-medium text-slate-800">{log.action}</td>
+                <td className="px-4 py-3 text-xs text-slate-600">{log.entityType} · {log.entityId}</td>
+                <td className="px-4 py-3"><span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-[0.2em] ${log.success ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{log.success ? 'Success' : 'Failure'}</span></td>
+                <td className="px-4 py-3 text-xs text-slate-500">{new Date(log.timestamp).toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ReportsPage({ state }: { state: PharmacyState }) {
+  const sales = state.sales.filter((sale) => sale.status === "COMPLETED");
+  const totalRevenue = sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
+  const inventoryValue = state.medicines.reduce((sum, medicine) => sum + medicine.unitPrice * medicine.quantity, 0);
+
+  const byPayment = Object.entries(
+    sales.reduce<Record<string, number>>((acc, sale) => {
+      acc[sale.paymentMethod] = (acc[sale.paymentMethod] ?? 0) + sale.totalAmount;
+      return acc;
+    }, {})
+  ).map(([name, value]) => ({ name, value }));
+
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-4 md:grid-cols-3">
+        <StatCard title="Total Revenue" value={fmt(totalRevenue)} sub={`${sales.length} sales`} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm-.03 4.5h.06A1.14 1.14 0 0 1 13.2 8.2v3.7h1.34v1.5h-1.34V15H11.5v-1.6H9.86v-1.5h1.64V8.2A1.14 1.14 0 0 1 11.97 7Zm.03 8.3a1.04 1.04 0 1 1 1.04-1.04 1.04 1.04 0 0 1-1.04 1.04Z" /></svg>} accent="bg-emerald-50 text-emerald-600" />
+        <StatCard title="Inventory Value" value={fmt(inventoryValue)} sub={`${state.medicines.length} items`} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M7 9.5 12 5l5 4.5V18a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v-8.5Z" /></svg>} accent="bg-violet-50 text-violet-600" />
+        <StatCard title="Avg Transaction" value={fmt(totalRevenue / Math.max(1, sales.length))} sub="Per sale" icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M7 3.5h10A2.5 2.5 0 0 1 19.5 6v10A2.5 2.5 0 0 1 17 18.5H7A2.5 2.5 0 0 1 4.5 16V6A2.5 2.5 0 0 1 7 3.5Zm1.5 4h7v2h-7v-2Zm0 4h7v2h-7v-2Z" /></svg>} accent="bg-sky-50 text-sky-600" />
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-5 text-sm font-bold text-slate-900">Revenue by payment method</div>
+          <ResponsiveContainer width="100%" height={240}>
+            <BarChart data={byPayment}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+              <XAxis dataKey="name" tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(value) => `₱${value / 1000}k`} />
+              <Tooltip formatter={(value: number) => fmt(value)} />
+              <Bar dataKey="value" radius={[8, 8, 0, 0]} fill="#0d9488" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-5 text-sm font-bold text-slate-900">Top product lines</div>
+          <div className="space-y-3">
+            {Object.entries(
+              sales.flatMap((sale) => sale.items).reduce<Record<string, number>>((acc, item) => {
+                acc[item.medicineName] = (acc[item.medicineName] ?? 0) + item.quantity;
+                return acc;
+              }, {})
+            )
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 5)
+              .map(([name, qty]) => (
+                <div key={name} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+                  <span className="text-sm text-slate-700">{name}</span>
+                  <span className="text-sm font-bold text-slate-900">{qty}</span>
+                </div>
+              ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
+  return (
+    <div>
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">{label}</div>
+      <input type={type} value={value} onChange={(e) => onChange(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+    </div>
+  );
+}
+
+function StatCard({ title, value, sub, icon, accent }: { title: string; value: string; sub: string; icon: React.ReactNode; accent: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-start gap-4">
+        <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${accent}`}>{icon}</div>
+        <div>
+          <div className="text-xs font-medium text-slate-500">{title}</div>
+          <div className="mt-1 text-2xl font-bold text-slate-900">{value}</div>
+          <div className="mt-1 text-xs text-slate-500">{sub}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;
