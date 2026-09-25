@@ -208,7 +208,7 @@ function SystemShell({
   visibleNav: { id: Page; label: string; area: AccessArea; icon: React.ReactNode }[];
 }) {
   return (
-    <div className="flex h-screen bg-slate-100 text-slate-800">
+    <div className="app-shell flex h-screen bg-slate-100 text-slate-800">
       <aside className={`fixed inset-y-0 left-0 z-40 w-64 border-r border-slate-200 bg-white shadow-sm transition-transform duration-200 md:relative md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
         <div className="flex items-center justify-between border-b border-slate-100 p-5">
           <div className="flex items-center gap-3">
@@ -268,7 +268,7 @@ function SystemShell({
       {mobileOpen && <div className="fixed inset-0 z-30 bg-black/30 md:hidden" onClick={() => setMobileOpen(false)} />}
 
       <main className="flex-1 overflow-hidden">
-        <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 md:px-6">
+        <header className="app-header flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 md:px-6">
           <div className="flex items-center gap-3">
             <button onClick={() => setMobileOpen(true)} className="rounded-lg border border-slate-200 p-2 text-slate-600 md:hidden">
               <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4"><path d="M3 6h18v2H3V6Zm0 5h18v2H3v-2Zm0 5h18v2H3v-2Z" /></svg>
