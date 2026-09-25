@@ -150,6 +150,7 @@ function App() {
             <div className="mb-8">
               <div className="text-xs font-bold uppercase tracking-[0.26em] text-slate-500">Pharmacy access</div>
               <div className="mt-3 text-3xl font-extrabold text-slate-900">Welcome back</div>
+              <div className="mt-2 text-xs font-semibold tracking-[0.16em] text-teal-700">by Pharmasync</div>
             </div>
 
             <div className="mb-4">
