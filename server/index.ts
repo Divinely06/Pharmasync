@@ -5,12 +5,15 @@ import { Pool, type PoolClient } from "pg";
 import bcrypt from "bcryptjs";
 
 const connectionString = process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI;
-if (!connectionString) throw new Error("DATABASE_URL is required");
-const pool = new Pool({ connectionString, max: Number(process.env.DB_POOL_MAX ?? 2), ssl: connectionString.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined });
-const sessionSecret = process.env.SESSION_SECRET ?? connectionString;
+const pool = new Pool({ connectionString: connectionString ?? "", max: Number(process.env.DB_POOL_MAX ?? 2), ssl: connectionString?.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined });
+const sessionSecret = process.env.SESSION_SECRET ?? connectionString ?? "";
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use((_req, res, next) => { res.header("Access-Control-Allow-Origin", process.env.CLIENT_ORIGIN ?? "http://localhost:4175"); res.header("Access-Control-Allow-Headers", "Content-Type, Authorization"); res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS"); next(); });
+app.use("/api", (_req, res, next) => {
+  if (!connectionString) return res.status(503).json({ error: "DATABASE_URL is not configured for this deployment." });
+  next();
+});
 type AuthRequest = Request & { user?: { id: string; username: string; role: string } };
 type SessionPayload = { id: string; username: string; role: string; expiresAt: number };
 const signSession = (session: SessionPayload) => {
