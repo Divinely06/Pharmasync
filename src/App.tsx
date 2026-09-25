@@ -32,6 +32,9 @@ import {
   YAxis,
 } from "recharts";
 
+const pharmaBackground = "/pharma-background.jpg";
+const logoImage = "/logo.png";
+
 type Page = "dashboard" | "pos" | "inventory" | "suppliers" | "users" | "audit" | "reports";
 
 type CartItem = Medicine & { quantity: number };
