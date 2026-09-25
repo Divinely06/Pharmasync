@@ -1051,6 +1051,14 @@ function ReportsPage({ state }: { state: PharmacyState }) {
   const sales = state.sales.filter((sale) => sale.status === "COMPLETED");
   const totalRevenue = sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
   const inventoryValue = state.medicines.reduce((sum, medicine) => sum + medicine.unitPrice * medicine.quantity, 0);
+  const totalUnits = sales.flatMap((sale) => sale.items).reduce((sum, item) => sum + item.quantity, 0);
+  const lowStock = state.medicines.filter((medicine) => medicine.quantity <= medicine.reorderLevel).length;
+  const reportAnchor = sales.length ? new Date(Math.max(...sales.map((sale) => new Date(sale.transactionDate).getTime()))) : new Date();
+  const reportMonths = Array.from({ length: 6 }, (_, index) => new Date(reportAnchor.getFullYear(), reportAnchor.getMonth() - 5 + index, 1));
+  const monthlyRevenue = reportMonths.map((date) => ({
+    month: date.toLocaleString("en-US", { month: "short" }),
+    revenue: sales.filter((sale) => { const saleDate = new Date(sale.transactionDate); return saleDate.getFullYear() === date.getFullYear() && saleDate.getMonth() === date.getMonth(); }).reduce((sum, sale) => sum + sale.totalAmount, 0),
+  }));
 
   const byPayment = Object.entries(
     sales.reduce<Record<string, number>>((acc, sale) => {
@@ -1059,50 +1067,91 @@ function ReportsPage({ state }: { state: PharmacyState }) {
     }, {})
   ).map(([name, value]) => ({ name, value }));
 
+  const byCategory = Object.entries(
+    sales.flatMap((sale) => sale.items).reduce<Record<string, number>>((acc, item) => {
+      const medicine = state.medicines.find((entry) => entry.id === item.medicineId);
+      const category = medicine?.medicineType ?? "Other";
+      acc[category] = (acc[category] ?? 0) + item.quantity;
+      return acc;
+    }, {})
+  ).map(([name, value]) => ({ name, value }));
+
+  const topSelling = Object.entries(
+    sales.flatMap((sale) => sale.items).reduce<Record<string, { quantity: number; revenue: number }>>((acc, item) => {
+      const current = acc[item.medicineName] ?? { quantity: 0, revenue: 0 };
+      acc[item.medicineName] = { quantity: current.quantity + item.quantity, revenue: current.revenue + item.subtotal };
+      return acc;
+    }, {})
+  ).map(([name, value]) => ({ name, ...value })).sort((a, b) => b.quantity - a.quantity).slice(0, 5);
+
+  const movement = reportMonths.map((date) => {
+    const month = date.toLocaleString("en-US", { month: "short" });
+    const monthSales = sales.filter((sale) => { const saleDate = new Date(sale.transactionDate); return saleDate.getFullYear() === date.getFullYear() && saleDate.getMonth() === date.getMonth(); });
+    const dispensed = monthSales.flatMap((sale) => sale.items).reduce((sum, item) => sum + item.quantity, 0);
+    const received = state.inventoryTransactions.filter((transaction) => { const transactionDate = new Date(transaction.timestamp); return transaction.transactionType === "PURCHASE" && transactionDate.getFullYear() === date.getFullYear() && transactionDate.getMonth() === date.getMonth(); }).reduce((sum, transaction) => sum + transaction.quantity, 0);
+    return { month, dispensed, received };
+  });
+
+  const download = (name: string, rows: string[][]) => {
+    const csv = rows.map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportSales = () => download("sales-transaction-log.csv", [["Transaction", "Date", "Cashier", "Payment", "Total"], ...sales.map((sale) => [sale.id, sale.transactionDate, sale.cashierName, sale.paymentMethod, String(sale.totalAmount)])]);
+  const exportInventory = () => download("inventory-report.csv", [["Medicine", "Barcode", "Stock", "Reorder level", "Unit price", "Expiration"], ...state.medicines.map((medicine) => [medicine.brandName, medicine.barcode, String(medicine.quantity), String(medicine.reorderLevel), String(medicine.unitPrice), medicine.expirationDate])]);
+
   return (
-    <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-3">
-        <StatCard title="Total Revenue" value={fmt(totalRevenue)} sub={`${sales.length} sales`} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm-.03 4.5h.06A1.14 1.14 0 0 1 13.2 8.2v3.7h1.34v1.5h-1.34V15H11.5v-1.6H9.86v-1.5h1.64V8.2A1.14 1.14 0 0 1 11.97 7Zm.03 8.3a1.04 1.04 0 1 1 1.04-1.04 1.04 1.04 0 0 1-1.04 1.04Z" /></svg>} accent="bg-emerald-50 text-emerald-600" />
-        <StatCard title="Inventory Value" value={fmt(inventoryValue)} sub={`${state.medicines.length} items`} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M7 9.5 12 5l5 4.5V18a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v-8.5Z" /></svg>} accent="bg-violet-50 text-violet-600" />
-        <StatCard title="Avg Transaction" value={fmt(totalRevenue / Math.max(1, sales.length))} sub="Per sale" icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M7 3.5h10A2.5 2.5 0 0 1 19.5 6v10A2.5 2.5 0 0 1 17 18.5H7A2.5 2.5 0 0 1 4.5 16V6A2.5 2.5 0 0 1 7 3.5Zm1.5 4h7v2h-7v-2Zm0 4h7v2h-7v-2Z" /></svg>} accent="bg-sky-50 text-sky-600" />
+    <div className="space-y-5">
+      <div className="flex flex-col justify-between gap-3 md:flex-row md:items-end">
+        <div><div className="text-2xl font-bold text-slate-900">Reports &amp; Analytics</div><div className="text-xs text-slate-500">Revenue, inventory movement, and sales performance</div></div>
+        <button onClick={() => exportSales()} className="inline-flex items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 py-2.5 text-xs font-bold text-white hover:bg-teal-600">Export all reports</button>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-5 text-sm font-bold text-slate-900">Revenue by payment method</div>
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={byPayment}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-              <XAxis dataKey="name" tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(value) => `₱${value / 1000}k`} />
-              <Tooltip formatter={(value: number) => fmt(value)} />
-              <Bar dataKey="value" radius={[8, 8, 0, 0]} fill="#0d9488" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-5 text-sm font-bold text-slate-900">Top product lines</div>
-          <div className="space-y-3">
-            {Object.entries(
-              sales.flatMap((sale) => sale.items).reduce<Record<string, number>>((acc, item) => {
-                acc[item.medicineName] = (acc[item.medicineName] ?? 0) + item.quantity;
-                return acc;
-              }, {})
-            )
-              .sort((a, b) => b[1] - a[1])
-              .slice(0, 5)
-              .map(([name, qty]) => (
-                <div key={name} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
-                  <span className="text-sm text-slate-700">{name}</span>
-                  <span className="text-sm font-bold text-slate-900">{qty}</span>
-                </div>
-              ))}
-          </div>
-        </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <ReportMetric label="YTD Revenue" value={fmt(totalRevenue)} note={`${sales.length} completed transactions`} color="text-teal-700" />
+        <ReportMetric label="Total Transactions" value={sales.length.toLocaleString()} note="Completed sales in the system" color="text-slate-900" />
+        <ReportMetric label="Medicines Dispensed" value={totalUnits.toLocaleString()} note="Units recorded on sales" color="text-slate-900" />
+        <ReportMetric label="Average Basket Size" value={fmt(totalRevenue / Math.max(1, sales.length))} note={`${lowStock} low-stock items`} color="text-teal-700" />
       </div>
+
+      <div className="grid gap-5 xl:grid-cols-[1.55fr_1fr]">
+        <ReportPanel title="Monthly Revenue" subtitle="Revenue by transaction month">
+          <ResponsiveContainer width="100%" height={240}><BarChart data={monthlyRevenue}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} /><XAxis dataKey="month" tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(value) => `₱${Number(value) / 1000}k`} /><Tooltip formatter={(value) => fmt(Number(value ?? 0))} /><Bar dataKey="revenue" radius={[5, 5, 0, 0]} fill="#0f8587" /></BarChart></ResponsiveContainer>
+        </ReportPanel>
+        <ReportPanel title="Sales by Category" subtitle="Dispensed units by medicine type">
+          <ResponsiveContainer width="100%" height={240}><PieChart><Pie data={byCategory} dataKey="value" nameKey="name" innerRadius={58} outerRadius={86} paddingAngle={3}>{byCategory.map((entry, index) => <Cell key={entry.name} fill={PIE_COLORS[index % PIE_COLORS.length]} />)}</Pie><Tooltip /><Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} /></PieChart></ResponsiveContainer>
+        </ReportPanel>
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-[1.1fr_1fr]">
+        <ReportPanel title="Stock Movement" subtitle="Received and dispensed units">
+          <ResponsiveContainer width="100%" height={220}><LineChart data={movement}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} /><XAxis dataKey="month" tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} /><Tooltip /><Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} /><Line type="monotone" dataKey="received" name="Received" stroke="#0f8587" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="dispensed" name="Dispensed" stroke="#32b4a4" strokeWidth={2} strokeDasharray="4 3" dot={false} /></LineChart></ResponsiveContainer>
+        </ReportPanel>
+        <ReportPanel title="Top Selling Items" subtitle="Ranked by units dispensed">
+          <div className="space-y-3 pt-2">{topSelling.length === 0 ? <div className="py-12 text-center text-sm text-slate-400">No completed sales yet.</div> : topSelling.map((item, index) => <div key={item.name}><div className="mb-1 flex items-center gap-2 text-xs"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-teal-50 font-bold text-teal-700">{index + 1}</span><span className="min-w-0 flex-1 truncate font-semibold text-slate-700">{item.name}</span><span className="font-bold text-slate-800">{item.quantity}</span></div><div className="ml-7 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-teal-600" style={{ width: `${Math.max(8, (item.quantity / topSelling[0].quantity) * 100)}%` }} /></div><div className="ml-7 mt-1 text-[10px] text-slate-400">{fmt(item.revenue)} revenue</div></div>)}</div>
+        </ReportPanel>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="mb-3"><div className="text-sm font-bold text-slate-900">Generate Reports</div><div className="text-xs text-slate-500">Download structured reports for inventory and business monitoring</div></div><div className="grid gap-3 md:grid-cols-2"><ReportDownload title="Monthly Inventory Report" format="CSV" description="Stock levels, reorder points, and expiration dates" onClick={exportInventory} /><ReportDownload title="Sales Transaction Log" format="CSV" description="Completed transactions and payment details" onClick={exportSales} /><ReportDownload title="Revenue Summary" format="CSV" description="Revenue totals by payment method" onClick={() => download("revenue-summary.csv", [["Payment method", "Revenue"], ...byPayment.map((entry) => [entry.name, String(entry.value)])])} /><ReportDownload title="Low Stock Alert Report" format="CSV" description="Items below their configured reorder level" onClick={() => download("low-stock-report.csv", [["Medicine", "Current stock", "Reorder level"], ...state.medicines.filter((medicine) => medicine.quantity <= medicine.reorderLevel).map((medicine) => [medicine.brandName, String(medicine.quantity), String(medicine.reorderLevel)])])} /></div></div>
     </div>
   );
+}
+
+function ReportMetric({ label, value, note, color }: { label: string; value: string; note: string; color: string }) {
+  return <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div><div className={`mt-2 text-2xl font-bold ${color}`}>{value}</div><div className="mt-1 text-[11px] text-slate-500">{note}</div></div>;
+}
+
+function ReportPanel({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
+  return <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="mb-2"><div className="text-sm font-bold text-slate-900">{title}</div><div className="text-[11px] text-slate-500">{subtitle}</div></div>{children}</div>;
+}
+
+function ReportDownload({ title, format, description, onClick }: { title: string; format: string; description: string; onClick: () => void }) {
+  return <button onClick={onClick} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-teal-300 hover:bg-white"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-teal-700 shadow-sm">↓</span><span className="min-w-0 flex-1"><span className="block text-xs font-bold text-slate-800">{title} <span className="ml-1 rounded bg-teal-50 px-1.5 py-0.5 text-[9px] font-bold text-teal-700">{format}</span></span><span className="mt-0.5 block truncate text-[10px] text-slate-500">{description}</span></span><span className="text-xs font-bold text-teal-700">↓</span></button>;
 }
 
 function Field({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {

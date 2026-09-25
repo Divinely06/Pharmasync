@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import bcrypt from "bcryptjs";
 
-const connectionString = process.env.DATABASE_URL;
+const connectionString = process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI;
 if (!connectionString) throw new Error("DATABASE_URL is required");
 const pool = new Pool({ connectionString, ssl: connectionString.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined });
 const app = express();
@@ -50,4 +50,5 @@ app.post("/api/sales", auth, async (req: AuthRequest, res) => {
     await audit(client, req.user.id, "SALE_COMPLETED", "SALE", saleId, { total, paymentMethod: body.paymentMethod }); await client.query("COMMIT"); res.status(201).json({ id: saleId, subtotal, discount, tax, totalAmount: total, amountReceived: received, changeAmount: body.paymentMethod === "Cash" ? received - total : 0, items: lines });
   } catch (error) { await client.query("ROLLBACK"); res.status(400).json({ error: error instanceof Error ? error.message : "Sale failed" }); } finally { client.release(); }
 });
-app.listen(Number(process.env.API_PORT ?? 8787), "0.0.0.0", () => console.log(`PharmaSync API listening on port ${process.env.API_PORT ?? 8787}`));
+const port = Number(process.env.PORT ?? process.env.API_PORT ?? 8787);
+app.listen(port, "0.0.0.0", () => console.log(`PharmaSync API listening on port ${port}`));
