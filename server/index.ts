@@ -6,7 +6,7 @@ import bcrypt from "bcryptjs";
 
 const connectionString = process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI;
 if (!connectionString) throw new Error("DATABASE_URL is required");
-const pool = new Pool({ connectionString, ssl: connectionString.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined });
+const pool = new Pool({ connectionString, max: Number(process.env.DB_POOL_MAX ?? 2), ssl: connectionString.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined });
 const app = express();
 const sessions = new Map<string, { id: string; username: string; role: string; expiresAt: number }>();
 app.use(express.json({ limit: "1mb" }));
