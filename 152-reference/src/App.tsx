@@ -130,13 +130,13 @@ function App() {
 
   if (!authUser) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,_#ecfeff,_#f8fafc_45%,_#f1f5f9)] px-4">
+      <div className="login-background flex min-h-screen items-center justify-center px-4">
         <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white/90 p-8 shadow-2xl backdrop-blur">
           <div className="mb-6 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-600 text-lg font-bold text-white">P</div>
+            <BrandMark large />
             <div>
-              <div className="text-xl font-bold text-slate-900">PharmaSync</div>
-              <div className="text-xs text-slate-500">Pharmacy Management System</div>
+              <div className="text-xl font-bold text-slate-900">Pharmacy management</div>
+              <div className="text-xs text-slate-500">Team workspace</div>
             </div>
           </div>
 
@@ -212,9 +212,9 @@ function SystemShell({
       <aside className={`fixed inset-y-0 left-0 z-40 w-64 border-r border-slate-200 bg-white shadow-sm transition-transform duration-200 md:relative md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
         <div className="flex items-center justify-between border-b border-slate-100 p-5">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-600 text-sm font-bold text-white">P</div>
+            <BrandMark />
             <div>
-              <div className="text-sm font-bold text-slate-900">PharmaSync</div>
+              <div className="text-sm font-bold text-slate-900">Pharmacy management</div>
               <div className="text-[10px] uppercase tracking-[0.2em] text-slate-400">Operations</div>
             </div>
           </div>
@@ -1152,6 +1152,10 @@ function ReportPanel({ title, subtitle, children }: { title: string; subtitle: s
 
 function ReportDownload({ title, format, description, onClick }: { title: string; format: string; description: string; onClick: () => void }) {
   return <button onClick={onClick} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-teal-300 hover:bg-white"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-teal-700 shadow-sm">↓</span><span className="min-w-0 flex-1"><span className="block text-xs font-bold text-slate-800">{title} <span className="ml-1 rounded bg-teal-50 px-1.5 py-0.5 text-[9px] font-bold text-teal-700">{format}</span></span><span className="mt-0.5 block truncate text-[10px] text-slate-500">{description}</span></span><span className="text-xs font-bold text-teal-700">↓</span></button>;
+}
+
+function BrandMark({ large = false }: { large?: boolean }) {
+  return <span aria-label="Pharmacy team logo" className={`brand-mark ${large ? "brand-mark-large" : ""}`}><span /></span>;
 }
 
 function Field({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {

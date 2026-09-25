@@ -63,6 +63,86 @@ select:focus-visible {
   background: rgba(224, 236, 222, 0.74);
 }
 
+.login-background {
+  position: relative;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(224, 236, 222, 0.92), rgba(238, 248, 244, 0.96)),
+    repeating-linear-gradient(45deg, rgba(44, 105, 117, 0.045) 0, rgba(44, 105, 117, 0.045) 1px, transparent 1px, transparent 34px);
+}
+
+.login-background::before,
+.login-background::after {
+  position: absolute;
+  content: "";
+  pointer-events: none;
+  border: 1px solid rgba(44, 105, 117, 0.08);
+  border-radius: 999px;
+  transform: rotate(28deg);
+}
+
+.login-background::before {
+  width: 360px;
+  height: 110px;
+  right: -110px;
+  top: 12%;
+  box-shadow: -420px 420px 0 -1px rgba(104, 178, 160, 0.07);
+}
+
+.login-background::after {
+  width: 250px;
+  height: 78px;
+  left: -100px;
+  bottom: 18%;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.brand-mark {
+  position: relative;
+  display: inline-flex;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 0.8rem;
+  background: linear-gradient(145deg, #68b2a0, #2c6975);
+  box-shadow: 0 6px 14px rgba(44, 105, 117, 0.18);
+}
+
+.brand-mark::before,
+.brand-mark::after,
+.brand-mark span {
+  position: absolute;
+  content: "";
+  border-radius: 999px;
+  background: #ffffff;
+}
+
+.brand-mark::before {
+  width: 0.35rem;
+  height: 1.35rem;
+}
+
+.brand-mark::after {
+  width: 1.35rem;
+  height: 0.35rem;
+}
+
+.brand-mark span {
+  width: 0.35rem;
+  height: 1.35rem;
+  transform: rotate(45deg);
+  opacity: 0.72;
+}
+
+.brand-mark-large {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 1rem;
+}
+
 @layer utilities {
   .text-2xl { font-size: 1.2rem !important; line-height: 1.2; }
   .text-xl { font-size: 1rem !important; line-height: 1.3; }
