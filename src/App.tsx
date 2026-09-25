@@ -101,11 +101,19 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
-      if (!loginResponse.ok) throw new Error(loginResponse.status === 401 ? "Invalid username or password." : "Unable to sign in.");
+      if (!loginResponse.ok) {
+        if (loginResponse.status === 401) throw new Error("Invalid username or password.");
+        if (loginResponse.status === 404) throw new Error("The login API is missing from this Vercel deployment. Redeploy the latest project version.");
+        if (loginResponse.status >= 500) throw new Error("The login API failed. Check DATABASE_URL for this Vercel environment and review its Function Logs.");
+        throw new Error(`Login failed (HTTP ${loginResponse.status}).`);
+      }
       const result = await loginResponse.json();
       const token = result.token as string;
       const stateResponse = await fetch("/api/state", { headers: { Authorization: `Bearer ${token}` } });
-      if (!stateResponse.ok) throw new Error("Unable to load pharmacy data.");
+      if (!stateResponse.ok) {
+        if (stateResponse.status === 404) throw new Error("The pharmacy API is missing from this Vercel deployment. Redeploy the latest project version.");
+        throw new Error(`Unable to load pharmacy data (HTTP ${stateResponse.status}).`);
+      }
       const databaseState = await stateResponse.json() as PharmacyState;
       const user: PharmacyUser = {
         ...result.user,
@@ -118,7 +126,7 @@ function App() {
       setState(hydrateState(databaseState));
       setAuthUser(user);
     } catch (error) {
-      setLoginError(error instanceof Error ? error.message : "Unable to connect to the database.");
+      setLoginError(error instanceof TypeError ? "Cannot reach the login API. Confirm the Vercel deployment includes the /api function." : error instanceof Error ? error.message : "Unable to connect to the database.");
     } finally {
       setLoginPending(false);
     }
