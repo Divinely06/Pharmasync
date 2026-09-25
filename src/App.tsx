@@ -134,19 +134,19 @@ function App() {
   if (!authUser) {
     return (
       <div
-        className="login-background flex min-h-screen items-center justify-center px-4"
+        className="login-background relative flex min-h-screen items-center justify-center px-4 pb-8 pt-28 sm:px-8 sm:pt-32"
         style={{
           backgroundImage: `linear-gradient(rgba(255,255,255,0.72), rgba(255,255,255,0.84)), url(${pharmaBackground})`,
           backgroundSize: "cover",
           backgroundPosition: "center",
         }}
       >
-        <div className="grid w-full max-w-5xl overflow-hidden rounded-[32px] border border-slate-200/80 bg-white/80 shadow-[0_25px_80px_rgba(15,23,42,0.12)] backdrop-blur-sm lg:grid-cols-[1.05fr_1.2fr]">
-          <div className="flex items-center justify-center bg-slate-50/80 p-8 sm:p-10 lg:p-12">
-            <BrandMark large className="w-36 sm:w-44 lg:w-56" />
+          <div className="absolute left-5 -top-5 sm:left-8 sm:-top-3">
+            <BrandMark large className="h-40 w-40 sm:h-48 sm:w-48" />
           </div>
 
-          <div className="bg-white/90 p-8 sm:p-10 lg:p-12">
+          <div className="w-full max-w-md overflow-hidden rounded-[32px] border border-slate-200/80 bg-white/90 shadow-[0_25px_80px_rgba(15,23,42,0.12)] backdrop-blur-sm">
+            <div className="p-8 sm:p-10 lg:p-12">
             <div className="mb-8">
               <div className="text-xs font-bold uppercase tracking-[0.26em] text-slate-500">Pharmacy access</div>
               <div className="mt-3 text-3xl font-extrabold text-slate-900">Welcome back</div>
