@@ -23,6 +23,29 @@ CREATE TABLE IF NOT EXISTS medicines (
   status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'INACTIVE')), created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS purchases (
+  id TEXT PRIMARY KEY,
+  supplier_id TEXT NOT NULL REFERENCES suppliers(id),
+  purchase_date TIMESTAMPTZ NOT NULL DEFAULT now(),
+  reference_number TEXT NOT NULL UNIQUE,
+  total_amount NUMERIC(12,2) NOT NULL CHECK (total_amount >= 0),
+  status TEXT NOT NULL DEFAULT 'COMPLETED' CHECK (status IN ('PENDING', 'COMPLETED', 'CANCELLED')),
+  created_by TEXT NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS purchase_items (
+  id TEXT PRIMARY KEY,
+  purchase_id TEXT NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
+  medicine_id TEXT NOT NULL REFERENCES medicines(id),
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  unit_cost NUMERIC(12,2) NOT NULL CHECK (unit_cost >= 0),
+  subtotal NUMERIC(12,2) NOT NULL CHECK (subtotal >= 0),
+  batch_number TEXT NOT NULL,
+  expiration_date DATE NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS sales (
   id TEXT PRIMARY KEY, cashier_id TEXT NOT NULL REFERENCES users(id), transaction_date TIMESTAMPTZ NOT NULL DEFAULT now(), subtotal NUMERIC(12,2) NOT NULL CHECK (subtotal >= 0), discount NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (discount >= 0), tax NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (tax >= 0), total_amount NUMERIC(12,2) NOT NULL CHECK (total_amount >= 0), payment_method TEXT NOT NULL, amount_received NUMERIC(12,2) NOT NULL DEFAULT 0, change_amount NUMERIC(12,2) NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'COMPLETED' CHECK (status IN ('COMPLETED', 'VOIDED'))
 );
