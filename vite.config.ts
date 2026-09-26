@@ -15,7 +15,7 @@ export default defineConfig({
     port: Number(process.env.PORT ?? 4175),
     strictPort: true,
     proxy: {
-      "/api": process.env.API_URL ?? "http://localhost:8787",
+      "/api": process.env.API_PROXY_TARGET ?? "http://127.0.0.1:8787",
     },
   },
   preview: {

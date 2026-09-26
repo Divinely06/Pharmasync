@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AccessArea,
   AuditLog,
@@ -8,11 +8,10 @@ import {
   SaleRecord,
   Supplier,
   UserRole,
-  buildAuditLog,
-  calculateTotals,
   canAccess,
   fmt,
 } from "./data";
+import { ApiError, api, type ReceiptData, type ReportData } from "./api";
 import {
   BarChart,
   Bar,
@@ -29,12 +28,11 @@ import {
   YAxis,
 } from "recharts";
 
-const pharmaBackground = "/pharma-background.jpg";
-const logoImage = "/logo.png";
-
-type Page = "dashboard" | "pos" | "inventory" | "suppliers" | "users" | "audit" | "reports";
+type Page = "dashboard" | "pos" | "inventory" | "suppliers" | "users" | "audit" | "backups" | "reports";
 
 type CartItem = Medicine & { quantity: number };
+type BarcodeDetectorLike = { detect: (source: HTMLVideoElement) => Promise<{ rawValue: string }[]> };
+type BarcodeDetectorConstructor = new (options: { formats: string[] }) => BarcodeDetectorLike;
 
 const PIE_COLORS = ["#0d9488", "#6366f1", "#f59e0b", "#ec4899", "#22c55e"];
 
@@ -46,107 +44,93 @@ const navMeta: { id: Page; label: string; area: AccessArea; icon: React.ReactNod
   { id: "users", label: "Users", area: "USERS", icon: <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M7.5 9.5A2.5 2.5 0 1 1 7.5 4a2.5 2.5 0 0 1 0 5.5Zm9 0A2.5 2.5 0 1 1 16.5 4a2.5 2.5 0 0 1 0 5.5ZM4 17.5c0-2.21 2.18-4 5.5-4s5.5 1.79 5.5 4v1.5H4v-1.5Zm10 0c0-1.2 1.15-2.5 3-2.5 1.2 0 2.3.34 3.1.95V19H14v-1.5Z" /></svg> },
   { id: "reports", label: "Reports", area: "REPORTS", icon: <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M5 3.75A1.75 1.75 0 0 1 6.75 2h10.5A1.75 1.75 0 0 1 19 3.75v16.5A1.75 1.75 0 0 1 17.25 22H6.75A1.75 1.75 0 0 1 5 20.25V3.75Zm2.5 3.5h9v1.5h-9v-1.5Zm0 4h9v1.5h-9v-1.5Zm0 4h6v1.5h-6v-1.5Z" /></svg> },
   { id: "audit", label: "Audit Logs", area: "AUDIT", icon: <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M12 2.25a9.75 9.75 0 1 0 9.75 9.75A9.76 9.76 0 0 0 12 2.25Zm0 4.5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0V7.5A.75.75 0 0 1 12 6.75Zm0 9.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" /></svg> },
+  { id: "backups", label: "Backups", area: "USERS", icon: <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M4 4h16v4H4V4Zm1 6h14v10H5V10Zm3 2v2h8v-2H8Zm0 4v2h5v-2H8Z" /></svg> },
 ];
 
-const emptyState: PharmacyState = {
-  users: [],
-  suppliers: [],
-  medicines: [],
-  purchases: [],
-  purchaseItems: [],
-  sales: [],
-  saleItems: [],
-  inventoryTransactions: [],
-  auditLogs: [],
-};
+const emptyState: PharmacyState = { users: [], suppliers: [], medicines: [], medicineBatches: [], purchases: [], purchaseItems: [], sales: [], saleItems: [], inventoryTransactions: [], auditLogs: [] };
 
-const hydrateState = (databaseState: PharmacyState): PharmacyState => ({
-  ...databaseState,
-  medicines: databaseState.medicines.map((medicine) => ({ ...medicine, unitPrice: Number(medicine.unitPrice) })),
-  sales: databaseState.sales.map((sale) => ({
+const hydrateState = (source: PharmacyState): PharmacyState => ({
+  ...source,
+  sales: source.sales.map((sale) => ({
     ...sale,
-    subtotal: Number(sale.subtotal),
-    discount: Number(sale.discount),
-    tax: Number(sale.tax),
-    totalAmount: Number(sale.totalAmount),
-    amountReceived: Number(sale.amountReceived),
-    changeAmount: Number(sale.changeAmount),
-    items: databaseState.saleItems.filter((item) => item.saleId === sale.id).map((item) => ({
+    transactionTime: new Date(sale.transactionDate).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
+    items: source.saleItems.filter((item) => item.saleId === sale.id).map((item) => ({
       medicineId: item.medicineId,
-      medicineName: databaseState.medicines.find((medicine) => medicine.id === item.medicineId)?.brandName ?? "Unknown medicine",
-      quantity: Number(item.quantity),
-      unitPrice: Number(item.unitPrice),
-      subtotal: Number(item.subtotal),
+      medicineName: item.medicineName,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      subtotal: item.subtotal,
     })),
   })),
 });
 
-const loadPharmacyState = async (apiToken: string | null): Promise<PharmacyState> => {
-  const response = await fetch("/api/state", { headers: { Authorization: `Bearer ${apiToken}` } });
-  if (!response.ok) throw new Error("Saved, but pharmacy data could not be refreshed.");
-  return hydrateState(await response.json() as PharmacyState);
-};
+const errorMessage = (error: unknown) => error instanceof Error ? error.message : "The request could not be completed.";
+const dateKey = (value: string | Date) => new Date(value).toLocaleDateString("en-CA");
+const today = () => dateKey(new Date());
 
 function App() {
   const [state, setState] = useState<PharmacyState>(emptyState);
   const [page, setPage] = useState<Page>("dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [authUser, setAuthUser] = useState<PharmacyUser | null>(null);
-  const [apiToken, setApiToken] = useState<string | null>(null);
-  const [loginError, setLoginError] = useState("");
-  const [loginPending, setLoginPending] = useState(false);
   const [login, setLogin] = useState({ username: "", password: "" });
+  const [loginError, setLoginError] = useState("");
+  const [appError, setAppError] = useState("");
+  const [booting, setBooting] = useState(true);
 
-  const loginUser = async (username: string, password: string) => {
-    setLoginPending(true);
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const { user } = await api.session();
+        const loaded = hydrateState(await api.state());
+        if (active) { setAuthUser(user); setState(loaded); }
+      } catch (error) {
+        if (!(error instanceof ApiError && error.status === 401) && active) setAppError(errorMessage(error));
+      } finally {
+        if (active) setBooting(false);
+      }
+    })();
+    return () => { active = false; };
+  }, []);
+
+  const refreshData = async () => {
+    const loaded = hydrateState(await api.state());
+    setState(loaded);
+    return loaded;
+  };
+
+  const loginUser = async () => {
     setLoginError("");
     try {
-      const loginResponse = await fetch("/api/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      if (!loginResponse.ok) {
-        if (loginResponse.status === 401) throw new Error("Invalid username or password.");
-        if (loginResponse.status === 404) throw new Error("The login API is missing from this Vercel deployment. Redeploy the latest project version.");
-        if (loginResponse.status >= 500) throw new Error("The login API failed. Check DATABASE_URL for this Vercel environment and review its Function Logs.");
-        throw new Error(`Login failed (HTTP ${loginResponse.status}).`);
-      }
-      const result = await loginResponse.json();
-      const token = result.token as string;
-      const stateResponse = await fetch("/api/state", { headers: { Authorization: `Bearer ${token}` } });
-      if (!stateResponse.ok) {
-        if (stateResponse.status === 404) throw new Error("The pharmacy API is missing from this Vercel deployment. Redeploy the latest project version.");
-        throw new Error(`Unable to load pharmacy data (HTTP ${stateResponse.status}).`);
-      }
-      const databaseState = await stateResponse.json() as PharmacyState;
-      const user: PharmacyUser = {
-        ...result.user,
-        fullName: result.user.full_name,
-        createdAt: result.user.created_at,
-        updatedAt: result.user.updated_at,
-        lastLogin: result.user.last_login,
-      };
-      setApiToken(token);
-      setState(hydrateState(databaseState));
+      const { user } = await api.login(login.username, login.password);
       setAuthUser(user);
+      await refreshData();
     } catch (error) {
-      setLoginError(error instanceof TypeError ? "Cannot reach the login API. Confirm the Vercel deployment includes the /api function." : error instanceof Error ? error.message : "Unable to connect to the database.");
-    } finally {
-      setLoginPending(false);
+      setLoginError(errorMessage(error));
     }
   };
 
-  const logout = () => {
-    setApiToken(null);
-    setAuthUser(null);
+  const logout = async () => {
+    try {
+      await api.logout();
+      setAuthUser(null);
+      setState(emptyState);
+    } catch (error) {
+      setAppError(errorMessage(error));
+    }
   };
 
-  const today = new Date().toISOString().slice(0, 10);
   const lowStockCount = state.medicines.filter((item) => item.quantity <= item.reorderLevel).length;
   const todayRevenue = state.sales
-    .filter((sale) => sale.transactionDate.slice(0, 10) === today && sale.status === "COMPLETED")
+    .filter((sale) => dateKey(sale.transactionDate) === today() && sale.status === "COMPLETED")
     .reduce((sum, sale) => sum + sale.totalAmount, 0);
+
+  if (booting) return <div className="flex min-h-screen items-center justify-center text-sm text-slate-600">Connecting to pharmacy service...</div>;
+
+  if (appError && !authUser) {
+    return <div className="flex min-h-screen items-center justify-center p-4"><div className="w-full max-w-md rounded-2xl border border-rose-200 bg-white p-6 shadow-lg"><h1 className="text-lg font-bold text-slate-900">Service unavailable</h1><p className="mt-2 text-sm text-slate-600">{appError}</p><button onClick={() => window.location.reload()} className="mt-5 rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white">Retry connection</button></div></div>;
+  }
 
   if (!authUser) {
     return (
@@ -170,35 +154,41 @@ function App() {
               <div className="mt-2 text-xs font-semibold tracking-[0.16em] text-teal-700">by Pharmasync</div>
             </div>
 
-            <div className="mb-4">
-              <div className="text-sm font-medium text-slate-500">Username</div>
-              <input
+          <form onSubmit={(event) => { event.preventDefault(); void loginUser(); }}>
+          <div className="mb-4">
+                <label htmlFor="login-username" className="text-sm font-medium text-slate-500">Username</label>
+            <input
+                  id="login-username"
+                  autoComplete="username"
+                  required
                 value={login.username}
-                onChange={(e) => setLogin((prev) => ({ ...prev, username: e.target.value }))}
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none ring-0 focus:border-teal-500"
-              />
-            </div>
-
-            <div className="mb-6">
-              <div className="text-sm font-medium text-slate-500">Password</div>
-              <input
-                type="password"
-                value={login.password}
-                onChange={(e) => setLogin((prev) => ({ ...prev, password: e.target.value }))}
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none ring-0 focus:border-teal-500"
-              />
-            </div>
-
-            <button
-              onClick={() => void loginUser(login.username, login.password)}
-              disabled={loginPending}
-              className="w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white shadow hover:bg-slate-700"
-            >
-              {loginPending ? "Signing in..." : "Sign in"}
-            </button>
-            {loginError && <div role="alert" className="mt-3 text-sm text-red-600">{loginError}</div>}
-
+              onChange={(e) => setLogin((prev) => ({ ...prev, username: e.target.value }))}
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none ring-0 focus:border-teal-500"
+            />
           </div>
+
+          <div className="mb-6">
+                <label htmlFor="login-password" className="text-sm font-medium text-slate-500">Password</label>
+            <input
+                  id="login-password"
+              type="password"
+                  autoComplete="current-password"
+                  required
+                value={login.password}
+              onChange={(e) => setLogin((prev) => ({ ...prev, password: e.target.value }))}
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none ring-0 focus:border-teal-500"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={!login.username || !login.password}
+            className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white shadow hover:bg-teal-500"
+          >
+            Sign in
+          </button>
+          {loginError && <div role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{loginError}</div>}
+          </form>
         </div>
       </div>
     );
@@ -206,12 +196,11 @@ function App() {
 
   const currentUser = authUser;
   const visibleNav = navMeta.filter((item) => canAccess(currentUser.role, item.area));
-  return <SystemShell {...{ state, setState, page, setPage, mobileOpen, setMobileOpen, currentUser, logout, lowStockCount, todayRevenue, visibleNav, apiToken }} />;
+  return <SystemShell {...{ state, page, setPage, mobileOpen, setMobileOpen, currentUser, logout, lowStockCount, todayRevenue, visibleNav, refreshData, appError, setAppError }} />;
 }
 
 function SystemShell({
   state,
-  setState,
   page,
   setPage,
   mobileOpen,
@@ -221,10 +210,11 @@ function SystemShell({
   lowStockCount,
   todayRevenue,
   visibleNav,
-  apiToken,
+  refreshData,
+  appError,
+  setAppError,
 }: {
   state: PharmacyState;
-  setState: React.Dispatch<React.SetStateAction<PharmacyState>>;
   page: Page;
   setPage: React.Dispatch<React.SetStateAction<Page>>;
   mobileOpen: boolean;
@@ -234,7 +224,9 @@ function SystemShell({
   lowStockCount: number;
   todayRevenue: number;
   visibleNav: { id: Page; label: string; area: AccessArea; icon: React.ReactNode }[];
-  apiToken: string | null;
+  refreshData: () => Promise<PharmacyState>;
+  appError: string;
+  setAppError: React.Dispatch<React.SetStateAction<string>>;
 }) {
   return (
     <div className="app-shell flex h-screen bg-white text-slate-800">
@@ -248,7 +240,7 @@ function SystemShell({
         <div className="mx-3 mt-4 rounded-2xl bg-gradient-to-r from-teal-600 to-cyan-600 p-4 text-white shadow-lg">
           <div className="text-[10px] uppercase tracking-[0.22em] text-teal-100">Today</div>
           <div className="mt-1 text-2xl font-bold">{fmt(todayRevenue)}</div>
-          <div className="mt-1 text-xs text-teal-100">Sales captured {state.sales.filter((sale) => sale.transactionDate.slice(0, 10) === new Date().toISOString().slice(0, 10)).length} transactions</div>
+          <div className="mt-1 text-xs text-teal-100">Sales captured {state.sales.filter((sale) => dateKey(sale.transactionDate) === today()).length} transactions</div>
         </div>
 
         <nav className="space-y-1 p-3">
@@ -299,7 +291,7 @@ function SystemShell({
               <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4"><path d="M3 6h18v2H3V6Zm0 5h18v2H3v-2Zm0 5h18v2H3v-2Z" /></svg>
             </button>
             <div>
-              <div className="text-xl font-bold text-slate-900">{page === "dashboard" ? "Dashboard" : page === "pos" ? "Point of Sale" : page === "inventory" ? "Inventory" : page === "suppliers" ? "Suppliers" : page === "users" ? "Users" : page === "audit" ? "Audit Logs" : "Reports"}</div>
+              <div className="text-xl font-bold text-slate-900">{page === "dashboard" ? "Dashboard" : page === "pos" ? "Point of Sale" : page === "inventory" ? "Inventory" : page === "suppliers" ? "Suppliers" : page === "users" ? "Users" : page === "audit" ? "Audit Logs" : page === "backups" ? "Backups" : "Reports"}</div>
               <div className="text-xs text-slate-500">Pharmacy operations overview</div>
             </div>
           </div>
@@ -308,11 +300,13 @@ function SystemShell({
 
         <div className="h-[calc(100%-73px)] overflow-auto p-4 md:p-6">
           {page === "dashboard" && <DashboardPage state={state} />}
-          {page === "pos" && <PosPage state={state} setState={setState} user={currentUser} apiToken={apiToken} />}
-          {page === "inventory" && <InventoryPage state={state} setState={setState} apiToken={apiToken} />}
-          {page === "suppliers" && <SuppliersPage state={state} setState={setState} apiToken={apiToken} />}
-          {page === "users" && currentUser.role === "ADMIN" && <UsersPage state={state} setState={setState} apiToken={apiToken} />}
-          {page === "audit" && currentUser.role === "ADMIN" && <AuditPage logs={state.auditLogs} />}
+          {appError && <div role="alert" className="mb-4 flex items-center justify-between rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><span>{appError}</span><button onClick={() => void refreshData().then(() => setAppError("")).catch((error) => setAppError(errorMessage(error)))} className="font-semibold underline">Retry</button></div>}
+          {page === "pos" && <PosPage state={state} onRefresh={refreshData} />}
+          {page === "inventory" && <InventoryPage state={state} onRefresh={refreshData} />}
+          {page === "suppliers" && <SuppliersPage state={state} onRefresh={refreshData} />}
+          {page === "users" && currentUser.role === "ADMIN" && <UsersPage state={state} onRefresh={refreshData} currentUser={currentUser} />}
+          {page === "audit" && currentUser.role === "ADMIN" && <AuditPage />}
+          {page === "backups" && currentUser.role === "ADMIN" && <BackupsPage />}
           {page === "reports" && <ReportsPage state={state} />}
         </div>
       </main>
@@ -321,23 +315,21 @@ function SystemShell({
 }
 
 function DashboardPage({ state }: { state: PharmacyState }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const todaySales = state.sales.filter((sale) => sale.transactionDate.slice(0, 10) === today && sale.status === "COMPLETED");
+  const todaySales = state.sales.filter((sale) => dateKey(sale.transactionDate) === today());
   const totalRevenue = todaySales.reduce((sum, sale) => sum + sale.totalAmount, 0);
   const lowStock = state.medicines.filter((item) => item.quantity <= item.reorderLevel);
   const expiringSoon = state.medicines.filter((item) => {
-    const days = (new Date(item.expirationDate).getTime() - new Date(today).getTime()) / 86400000;
+    const days = (new Date(item.expirationDate).getTime() - new Date(today()).getTime()) / 86400000;
     return days <= 90 && days > 0;
   });
+  const weekStart = new Date();
+  weekStart.setHours(0, 0, 0, 0);
+  weekStart.setDate(weekStart.getDate() - 6);
   const weeklySales = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date();
-    date.setDate(date.getDate() - (6 - index));
-    const dateKey = date.toISOString().slice(0, 10);
-    const salesForDay = state.sales.filter((sale) => sale.transactionDate.slice(0, 10) === dateKey && sale.status === "COMPLETED");
-    return {
-      day: date.toLocaleDateString(undefined, { weekday: "short" }),
-      revenue: salesForDay.reduce((sum, sale) => sum + sale.totalAmount, 0),
-    };
+    const day = new Date(weekStart);
+    day.setDate(weekStart.getDate() + index);
+    const key = dateKey(day);
+    return { day: day.toLocaleDateString("en", { weekday: "short" }), revenue: state.sales.filter((sale) => sale.status === "COMPLETED" && dateKey(sale.transactionDate) === key).reduce((sum, sale) => sum + sale.totalAmount, 0) };
   });
 
   const paymentBreakdown = Object.entries(
@@ -363,6 +355,7 @@ function DashboardPage({ state }: { state: PharmacyState }) {
               <div className="text-sm font-bold text-slate-900">Weekly Revenue</div>
               <div className="text-xs text-slate-500">Last 7 days</div>
             </div>
+            <div className="text-xs text-slate-500">Live data</div>
           </div>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={weeklySales}>
@@ -419,20 +412,86 @@ function DashboardPage({ state }: { state: PharmacyState }) {
   );
 }
 
-function PosPage({ state, setState, user, apiToken }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>>; user: PharmacyUser; apiToken: string | null }) {
+function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => Promise<PharmacyState> }) {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [paymentMethod, setPaymentMethod] = useState("Cash");
   const [discount, setDiscount] = useState("0");
   const [amountReceived, setAmountReceived] = useState("0");
-  const [receipt, setReceipt] = useState<SaleRecord | null>(null);
+  const [receipt, setReceipt] = useState<ReceiptData | null>(null);
+  const [receiptFormat, setReceiptFormat] = useState<"thermal" | "standard">("thermal");
+  const [submitting, setSubmitting] = useState(false);
+  const [saleError, setSaleError] = useState("");
+  const [cartError, setCartError] = useState("");
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+  const [remoteMedicines, setRemoteMedicines] = useState<Medicine[]>([]);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [searchPage, setSearchPage] = useState(1);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const [pendingPayment, setPendingPayment] = useState<{ saleId: string; paymentId: string } | null>(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerError, setScannerError] = useState("");
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  const items = state.medicines.filter((medicine) => {
+  useEffect(() => {
+    if (!scannerOpen) return;
+    let active = true;
+    let stream: MediaStream | null = null;
+    let animationFrame = 0;
+    const Detector = (window as Window & { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector;
+    if (!Detector || !navigator.mediaDevices?.getUserMedia) {
+      setScannerError("Camera barcode scanning is not supported here. Use a keyboard barcode scanner or type the code.");
+      return () => { active = false; };
+    }
+    void navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } } }).then(async (camera) => {
+      if (!active) { camera.getTracks().forEach((track) => track.stop()); return; }
+      stream = camera;
+      const video = videoRef.current;
+      if (!video) return;
+      video.srcObject = camera;
+      await video.play();
+      const detector = new Detector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "qr_code"] });
+      const scan = async () => {
+        if (!active) return;
+        try {
+          const match = (await detector.detect(video))[0];
+          if (match?.rawValue) { setSearch(match.rawValue); setSearchPage(1); setScannerOpen(false); return; }
+        } catch { setScannerError("Unable to read a barcode from this camera frame."); }
+        animationFrame = window.requestAnimationFrame(() => void scan());
+      };
+      void scan();
+    }).catch(() => { if (active) setScannerError("Camera permission was denied or no camera is available."); });
+    return () => {
+      active = false;
+      window.cancelAnimationFrame(animationFrame);
+      stream?.getTracks().forEach((track) => track.stop());
+      if (videoRef.current) videoRef.current.srcObject = null;
+    };
+  }, [scannerOpen]);
+
+  useEffect(() => {
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setSearchLoading(true);
+      setSearchError("");
+      void api.searchMedicines(search.trim(), searchPage, 30).then((result) => {
+        if (!active) return;
+        setRemoteMedicines((previous) => searchPage === 1 ? result.medicines : [...previous, ...result.medicines.filter((medicine) => !previous.some((entry) => entry.id === medicine.id))]);
+        setSearchTotal(result.total);
+      }).catch((error) => { if (active) setSearchError(errorMessage(error)); }).finally(() => { if (active) setSearchLoading(false); });
+    }, 250);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [search, searchPage]);
+
+  const availableStock = (medicineId: string) => state.medicineBatches
+    .filter((batch) => batch.medicineId === medicineId && batch.quantity > 0 && batch.expirationDate >= today())
+    .reduce((total, batch) => total + batch.quantity, 0);
+
+  const items = remoteMedicines.filter((medicine) => {
     const matchCategory = category === "All" || medicine.medicineType === category;
-    const matchSearch = [medicine.brandName, medicine.genericName, medicine.barcode].some((field) => field.toLowerCase().includes(search.toLowerCase()));
-    const isUnexpired = medicine.expirationDate >= new Date().toISOString().slice(0, 10);
-    return matchCategory && matchSearch && medicine.quantity > 0 && isUnexpired;
+    return matchCategory && availableStock(medicine.id) > 0;
   });
 
   const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
@@ -443,10 +502,15 @@ function PosPage({ state, setState, user, apiToken }: { state: PharmacyState; se
   const change = Number((Number(amountReceived || 0) - total).toFixed(2));
 
   const addToCart = (medicine: Medicine) => {
+    setCartError("");
     setCart((prev) => {
       const existing = prev.find((item) => item.id === medicine.id);
       if (existing) {
-        return prev.map((item) => (item.id === medicine.id ? { ...item, quantity: Math.min(item.quantity + 1, medicine.quantity) } : item));
+        if (existing.quantity >= availableStock(medicine.id)) {
+          setCartError("Insufficient stock available.");
+          return prev;
+        }
+        return prev.map((item) => (item.id === medicine.id ? { ...item, quantity: Math.min(item.quantity + 1, availableStock(medicine.id)) } : item));
       }
       return [...prev, { ...medicine, quantity: 1 }];
     });
@@ -456,8 +520,9 @@ function PosPage({ state, setState, user, apiToken }: { state: PharmacyState; se
     setCart((prev) =>
       prev.flatMap((item) => {
         if (item.id !== medicineId) return [item];
-        const available = state.medicines.find((medicine) => medicine.id === medicineId)?.quantity ?? item.quantity;
-        const safeValue = Math.min(available, Math.max(1, Math.floor(nextQty)));
+        const available = availableStock(medicineId);
+        const safeValue = Math.min(available, Math.max(1, Math.floor(nextQty || 1)));
+        if (safeValue < nextQty) setCartError("Insufficient stock available.");
         return [{ ...item, quantity: safeValue }];
       })
     );
@@ -465,72 +530,105 @@ function PosPage({ state, setState, user, apiToken }: { state: PharmacyState; se
 
   const removeFromCart = (medicineId: string) => setCart((prev) => prev.filter((item) => item.id !== medicineId));
 
-  const submitSale = async () => {
-    if (!cart.length) return;
-    if (Number(amountReceived || 0) < total && paymentMethod === "Cash") {
-      window.alert("Cash amount must cover the total.");
-      return;
-    }
-
-    try {
-      const response = await fetch("/api/sales", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiToken}` },
-        body: JSON.stringify({ items: cart.map((item) => ({ medicineId: item.id, quantity: item.quantity })), discount: discountValue, tax: taxValue, paymentMethod, amountReceived: Number(amountReceived || total) }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error ?? "Unable to complete sale.");
-      const sale: SaleRecord = {
-        id: result.id,
-        cashierId: user.id,
-        cashierName: user.fullName,
-        transactionDate: new Date().toISOString(),
-        transactionTime: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
-        subtotal: result.subtotal,
-        discount: result.discount,
-        tax: result.tax,
-        totalAmount: result.totalAmount,
-        paymentMethod,
-        amountReceived: result.amountReceived,
-        changeAmount: result.changeAmount,
-        status: "COMPLETED",
-        items: cart.map((item) => ({ medicineId: item.id, medicineName: item.brandName, quantity: item.quantity, unitPrice: item.unitPrice, subtotal: item.unitPrice * item.quantity })),
-      };
-      const stateResponse = await fetch("/api/state", { headers: { Authorization: `Bearer ${apiToken}` } });
-      if (!stateResponse.ok) throw new Error("Sale saved, but pharmacy data could not be refreshed.");
-      setState(hydrateState(await stateResponse.json() as PharmacyState));
-    setReceipt(sale);
+  const completeSale = async (saleId: string) => {
+    await onRefresh();
+    setReceipt(await api.receipt(saleId));
+    setPendingPayment(null);
     setCart([]);
     setDiscount("0");
     setAmountReceived("0");
     setPaymentMethod("Cash");
+    setIdempotencyKey(crypto.randomUUID());
+  };
+
+  const checkPendingPayment = async () => {
+    if (!pendingPayment) return;
+    try {
+      const result = await api.paymentStatus(pendingPayment.paymentId);
+      if (result.status === "PAID") await completeSale(pendingPayment.saleId);
+      else if (["FAILED", "CANCELLED", "EXPIRED", "REFUNDED"].includes(result.status)) {
+        setPendingPayment(null);
+        setIdempotencyKey(crypto.randomUUID());
+        setSaleError(`Payment ${result.status.toLowerCase()}. The cart is unchanged and can be retried.`);
+      } else setSaleError("Payment is still pending. Stock has not been changed.");
+    } catch (error) { setSaleError(errorMessage(error)); }
+  };
+
+  const cancelPendingPayment = async () => {
+    if (!pendingPayment) return;
+    try {
+      await api.cancelPayment(pendingPayment.paymentId);
+      setPendingPayment(null);
+      setIdempotencyKey(crypto.randomUUID());
+      setSaleError("Payment cancelled. The cart is unchanged and can be retried.");
+    } catch (error) { setSaleError(errorMessage(error)); }
+  };
+
+  const submitSale = async () => {
+    if (!cart.length || pendingPayment) return;
+    setSaleError("");
+    if (Number(amountReceived || 0) < total && paymentMethod === "Cash") {
+      setSaleError("Cash amount must cover the total.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const result = await api.createSale({
+        items: cart.map((item) => ({ medicineId: item.id, quantity: item.quantity })),
+        discount: discountValue,
+        paymentMethod,
+        amountReceived: Number(amountReceived || total),
+        idempotencyKey,
+      });
+      if (result.status === "PENDING") {
+        if (!result.paymentId) throw new Error("Pending payment did not return a payment reference.");
+        await onRefresh();
+        setPendingPayment({ saleId: result.id, paymentId: result.paymentId });
+        setSaleError("Payment is pending. Do not submit the order again; stock has not changed.");
+        return;
+      }
+      await completeSale(result.id);
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Unable to complete sale.");
+      setSaleError(errorMessage(error));
+      if (error instanceof ApiError && error.status === 402) setIdempotencyKey(crypto.randomUUID());
+      void onRefresh().catch(() => undefined);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   if (receipt) {
     return (
       <div className="flex min-h-full items-center justify-center bg-slate-50 p-6">
-        <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white shadow-xl">
+        <div className="receipt-print w-full max-w-md rounded-3xl border border-slate-200 bg-white shadow-xl" data-format={receiptFormat}>
           <div className="rounded-t-3xl bg-teal-600 px-6 py-6 text-center text-white">
             <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-white/20 text-xl">✓</div>
-            <div className="text-lg font-bold">Payment Confirmed</div>
+            <div className="text-lg font-bold">Sale completed</div>
             <div className="text-xs text-teal-100">{receipt.id}</div>
+            {receipt.simulated && <div className="mt-2 inline-flex rounded-full bg-white/15 px-2.5 py-1 text-xs font-bold">SIMULATED PAYMENT · {receipt.paymentMethod}</div>}
           </div>
           <div className="space-y-3 p-5">
             {receipt.items.map((item) => (
-              <div key={item.medicineId} className="flex items-center justify-between text-sm">
-                <span className="text-slate-600">{item.medicineName} × {item.quantity}</span>
-                <span className="font-semibold text-slate-800">{fmt(item.subtotal)}</span>
+              <div key={item.medicineId} className="text-sm">
+                <div className="flex items-center justify-between gap-3"><span className="text-slate-600">{item.medicineName} × {item.quantity}</span><span className="font-semibold text-slate-800">{fmt(item.subtotal)}</span></div>
+                {item.batches.length > 0 && <div className="mt-1 text-[10px] text-slate-500">{item.batches.map((batch) => `${batch.batchNumber} (${batch.quantity})`).join(", ")}</div>}
               </div>
             ))}
             <div className="rounded-xl bg-slate-50 p-3 text-sm">
               <div className="flex justify-between text-slate-600"><span>Subtotal</span><span>{fmt(receipt.subtotal)}</span></div>
               <div className="flex justify-between text-slate-600"><span>Discount</span><span>-{fmt(receipt.discount)}</span></div>
+              <div className="flex justify-between text-slate-600"><span>Tax</span><span>{fmt(receipt.tax)}</span></div>
               <div className="flex justify-between font-bold text-slate-900"><span>Total</span><span>{fmt(receipt.totalAmount)}</span></div>
+              <div className="mt-2 border-t border-slate-200 pt-2 text-xs text-slate-600">Payment: {receipt.paymentMethod} · {receipt.paymentStatus}</div>
+              {receipt.provider && <div className="text-xs text-slate-600">Provider: {receipt.provider}</div>}
+              {receipt.providerReference && <div className="break-all text-xs text-slate-600">Reference: {receipt.providerReference}</div>}
+              {receipt.paymentMethod === "Cash" && <><div className="flex justify-between text-xs text-slate-600"><span>Tendered</span><span>{fmt(receipt.amountReceived)}</span></div><div className="flex justify-between text-xs text-slate-600"><span>Change</span><span>{fmt(receipt.changeAmount)}</span></div></>}
             </div>
-            <button onClick={() => setReceipt(null)} className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white hover:bg-teal-500">New transaction</button>
+            <div className="receipt-controls flex flex-wrap justify-between gap-2">
+              <div className="inline-flex rounded-lg border border-slate-200 p-1"><button aria-pressed={receiptFormat === "thermal"} onClick={() => setReceiptFormat("thermal")} className={`rounded px-2 py-1 text-xs ${receiptFormat === "thermal" ? "bg-teal-700 text-white" : "text-slate-600"}`}>Thermal</button><button aria-pressed={receiptFormat === "standard"} onClick={() => setReceiptFormat("standard")} className={`rounded px-2 py-1 text-xs ${receiptFormat === "standard" ? "bg-teal-700 text-white" : "text-slate-600"}`}>Standard</button></div>
+              <button onClick={() => window.print()} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700">Print receipt</button>
+              <button onClick={() => setReceipt(null)} className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white">New transaction</button>
+            </div>
           </div>
         </div>
       </div>
@@ -542,8 +640,11 @@ function PosPage({ state, setState, user, apiToken }: { state: PharmacyState; se
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-100 p-4">
           <div className="mb-3 flex items-center gap-3">
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search medicines or scan barcode" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm focus:border-teal-500" />
+            <input aria-label="Search medicines or scan barcode" value={search} onChange={(e) => { setSearch(e.target.value); setSearchPage(1); }} placeholder="Search medicines or scan barcode" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm focus:border-teal-500" />
+            <button onClick={() => { setScannerError(""); setScannerOpen(true); }} className="shrink-0 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700">Scan barcode</button>
           </div>
+          {scannerOpen && <div className="mb-3 rounded-xl bg-slate-900 p-3"><video ref={videoRef} autoPlay playsInline muted className="max-h-64 w-full rounded-lg object-cover" /><button onClick={() => setScannerOpen(false)} className="mt-2 text-xs font-semibold text-white">Close scanner</button></div>}
+          {scannerError && <div role="status" className="mb-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">{scannerError}</div>}
           <div className="flex flex-wrap gap-2">
             {['All', 'Antibiotics', 'Analgesics', 'Cardiovascular', 'Diabetes', 'Antihistamine', 'Antacids', 'Vitamins', 'Respiratory', 'Dermatology'].map((filter) => (
               <button key={filter} onClick={() => setCategory(filter)} className={`rounded-full px-3 py-1.5 text-xs font-medium ${category === filter ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
@@ -554,11 +655,11 @@ function PosPage({ state, setState, user, apiToken }: { state: PharmacyState; se
         </div>
 
         <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
-          {items.map((medicine) => (
+          {items.length === 0 ? <div className="col-span-full rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">{searchLoading ? "Searching medicines..." : searchError || (search ? "Medicine not found." : "No in-stock, unexpired medicines available.")}</div> : items.map((medicine) => (
             <button key={medicine.id} onClick={() => addToCart(medicine)} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left shadow-sm hover:border-teal-300 hover:bg-white">
               <div className="mb-3 flex items-center justify-between">
                 <span className="rounded-full bg-teal-50 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-teal-700">{medicine.medicineType}</span>
-                <span className="text-[10px] text-slate-500">{medicine.quantity} left</span>
+                <span className="text-[10px] text-slate-500">{availableStock(medicine.id)} available</span>
               </div>
               <div className="text-sm font-bold text-slate-800">{medicine.brandName}</div>
               <div className="mt-1 text-xs text-slate-500">{medicine.genericName}</div>
@@ -569,6 +670,8 @@ function PosPage({ state, setState, user, apiToken }: { state: PharmacyState; se
             </button>
           ))}
         </div>
+        {searchError && items.length > 0 && <div role="alert" className="mx-4 mb-3 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{searchError}</div>}
+        {remoteMedicines.length < searchTotal && <div className="px-4 pb-4 text-center"><button disabled={searchLoading} onClick={() => setSearchPage((page) => page + 1)} className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50">{searchLoading ? "Loading..." : `Load more (${searchTotal - remoteMedicines.length} remaining)`}</button></div>}
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -581,6 +684,7 @@ function PosPage({ state, setState, user, apiToken }: { state: PharmacyState; se
         </div>
 
         <div className="max-h-[420px] space-y-3 overflow-y-auto p-4">
+          {cartError && <div role="alert" className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">{cartError}</div>}
           {cart.length === 0 ? (
             <div className="flex h-48 items-center justify-center text-center text-sm text-slate-400">No items added yet.</div>
           ) : cart.map((item) => (
@@ -623,6 +727,9 @@ function PosPage({ state, setState, user, apiToken }: { state: PharmacyState; se
               <input value={amountReceived} onChange={(e) => setAmountReceived(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
             </div>
           )}
+          {paymentMethod !== "Cash" && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">Demo simulation only. No real payment is collected.</div>}
+          {pendingPayment && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"><div className="font-semibold">Payment pending confirmation</div><div className="mt-1">Stock remains unchanged. Check the provider status or cancel this attempt.</div><div className="mt-2 flex gap-3"><button onClick={() => void checkPendingPayment()} className="font-semibold underline">Check status</button><button onClick={() => void cancelPendingPayment()} className="font-semibold underline">Cancel attempt</button></div></div>}
+          {saleError && <div role="alert" className="rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{saleError}</div>}
 
           <div className="space-y-2 text-sm text-slate-700">
             <div className="flex items-center justify-between"><span>Subtotal</span><span>{fmt(subtotal)}</span></div>
@@ -632,17 +739,22 @@ function PosPage({ state, setState, user, apiToken }: { state: PharmacyState; se
             {paymentMethod === 'Cash' && <div className="flex items-center justify-between text-sm"><span>Change</span><span>{fmt(change)}</span></div>}
           </div>
 
-          <button onClick={submitSale} className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white hover:bg-teal-500">Complete sale</button>
+          <button onClick={() => void submitSale()} disabled={submitting || cart.length === 0 || Boolean(pendingPayment)} className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50">{submitting ? "Processing..." : paymentMethod === "Cash" ? "Complete sale" : `Simulate ${paymentMethod} payment`}</button>
         </div>
       </div>
     </div>
   );
 }
 
-function InventoryPage({ state, setState, apiToken }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>>; apiToken: string | null }) {
+function InventoryPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => Promise<PharmacyState> }) {
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<{ mode: "Add" | "Edit"; item?: Medicine } | null>(null);
   const [draft, setDraft] = useState<Partial<Medicine>>({});
+  const [purchaseDraft, setPurchaseDraft] = useState({ supplierId: state.suppliers[0]?.id ?? "", medicineId: state.medicines[0]?.id ?? "", quantity: "1", unitCost: "0", batchNumber: "", expirationDate: "", referenceNumber: `PO-${Date.now()}` });
+  const [movementDraft, setMovementDraft] = useState({ batchId: state.medicineBatches[0]?.id ?? "", movement: "ADJUSTMENT", quantity: "1", direction: "OUT" as "IN" | "OUT", notes: "" });
+  const [operationError, setOperationError] = useState("");
+  const [referenceMedicine, setReferenceMedicine] = useState<Awaited<ReturnType<typeof api.medicineDetail>> | null>(null);
+  const [referenceLoading, setReferenceLoading] = useState(false);
 
   const filtered = state.medicines.filter((medicine) => {
     const q = search.toLowerCase();
@@ -679,46 +791,74 @@ function InventoryPage({ state, setState, apiToken }: { state: PharmacyState; se
     setModal({ mode: "Edit", item });
   };
 
-  const reloadState = async () => {
-    const response = await fetch("/api/state", { headers: { Authorization: `Bearer ${apiToken}` } });
-    if (!response.ok) throw new Error("Saved, but inventory could not be refreshed.");
-    setState(hydrateState(await response.json() as PharmacyState));
-  };
-
   const saveItem = async () => {
-    if (!draft.brandName || !draft.genericName || !draft.barcode || !draft.batchNumber || !draft.expirationDate) {
+    if (!draft.brandName || !draft.genericName || !draft.barcode || (modal?.mode === "Add" && (!draft.batchNumber || !draft.expirationDate))) {
       window.alert("Please complete all required fields.");
       return;
     }
 
     try {
-      const editingItem = modal?.mode === "Edit" ? modal.item : undefined;
-      const response = await fetch(editingItem ? `/api/medicines/${editingItem.id}` : "/api/medicines", {
-        method: editingItem ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiToken}` },
-        body: JSON.stringify({ ...draft, supplierId: draft.supplierId || null }),
+      await api.saveMedicine(modal?.mode === "Edit" ? modal.item?.id : undefined, {
+        ...draft,
+        supplierId: draft.supplierId || null,
+        unitPrice: Number(draft.unitPrice ?? 0),
+        quantity: Number(draft.quantity ?? 0),
+        reorderLevel: Number(draft.reorderLevel ?? 10),
       });
-      const result = response.status === 204 ? null : await response.json();
-      if (!response.ok) throw new Error(result?.error ?? "Unable to save medicine.");
-      await reloadState();
+      await onRefresh();
       setModal(null);
       setDraft({});
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Unable to save medicine.");
+      window.alert(errorMessage(error));
     }
   };
 
-  const deleteItem = async (itemId: string) => {
+  const createPurchase = async () => {
+    setOperationError("");
     try {
-      const response = await fetch(`/api/medicines/${itemId}`, { method: "DELETE", headers: { Authorization: `Bearer ${apiToken}` } });
-      if (!response.ok) {
-        const result = await response.json();
-        throw new Error(result.error ?? "Unable to delete medicine.");
-      }
-      await reloadState();
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Unable to delete medicine.");
-    }
+      await api.createPurchase({
+        supplierId: purchaseDraft.supplierId,
+        referenceNumber: purchaseDraft.referenceNumber,
+        items: [{ medicineId: purchaseDraft.medicineId, quantity: Number(purchaseDraft.quantity), unitCost: Number(purchaseDraft.unitCost), batchNumber: purchaseDraft.batchNumber, expirationDate: purchaseDraft.expirationDate }],
+      });
+      await onRefresh();
+      setPurchaseDraft((previous) => ({ ...previous, referenceNumber: `PO-${Date.now()}`, quantity: "1", batchNumber: "", expirationDate: "" }));
+    } catch (error) { setOperationError(errorMessage(error)); }
+  };
+
+  const receivePurchase = async (purchaseId: string) => {
+    setOperationError("");
+    try { await api.receivePurchase(purchaseId); await onRefresh(); }
+    catch (error) { setOperationError(errorMessage(error)); }
+  };
+
+  const cancelPurchase = async (purchaseId: string) => {
+    if (!window.confirm("Cancel this pending purchase order?")) return;
+    setOperationError("");
+    try { await api.cancelPurchase(purchaseId); await onRefresh(); }
+    catch (error) { setOperationError(errorMessage(error)); }
+  };
+
+  const recordMovement = async () => {
+    setOperationError("");
+    try {
+      await api.recordInventoryMovement({ ...movementDraft, quantity: Number(movementDraft.quantity) });
+      await onRefresh();
+    } catch (error) { setOperationError(errorMessage(error)); }
+  };
+
+  const deleteItem = async (itemId: string) => {
+    if (!window.confirm("Archive this medicine? It will no longer be available for sale.")) return;
+    try { await api.archiveMedicine(itemId); await onRefresh(); }
+    catch (error) { window.alert(errorMessage(error)); }
+  };
+
+  const viewReference = async (id: string) => {
+    setReferenceLoading(true);
+    setOperationError("");
+    try { setReferenceMedicine(await api.medicineDetail(id)); }
+    catch (error) { setOperationError(errorMessage(error)); }
+    finally { setReferenceLoading(false); }
   };
 
   return (
@@ -766,6 +906,7 @@ function InventoryPage({ state, setState, apiToken }: { state: PharmacyState; se
                   <td className="px-4 py-3 text-xs text-slate-600">{medicine.batchNumber}</td>
                   <td className="px-4 py-3">
                     <div className="flex gap-2">
+                      <button onClick={() => void viewReference(medicine.id)} className="text-xs font-semibold text-slate-600">Details</button>
                       <button onClick={() => openEdit(medicine)} className="text-xs font-semibold text-teal-700">Edit</button>
                       <button onClick={() => deleteItem(medicine.id)} className="text-xs font-semibold text-red-500">Delete</button>
                     </div>
@@ -775,6 +916,41 @@ function InventoryPage({ state, setState, apiToken }: { state: PharmacyState; se
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <h2 className="mb-4 text-sm font-bold text-slate-900">Purchase receiving</h2>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div><label htmlFor="purchase-supplier" className="mb-1 block text-xs font-semibold text-slate-600">Supplier</label><select id="purchase-supplier" value={purchaseDraft.supplierId} onChange={(event) => setPurchaseDraft({ ...purchaseDraft, supplierId: event.target.value })} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">{state.suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.supplierName}</option>)}</select></div>
+            <div><label htmlFor="purchase-medicine" className="mb-1 block text-xs font-semibold text-slate-600">Medicine</label><select id="purchase-medicine" value={purchaseDraft.medicineId} onChange={(event) => setPurchaseDraft({ ...purchaseDraft, medicineId: event.target.value })} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">{state.medicines.map((medicine) => <option key={medicine.id} value={medicine.id}>{medicine.brandName}</option>)}</select></div>
+            <Field label="Purchase reference" value={purchaseDraft.referenceNumber} onChange={(value) => setPurchaseDraft({ ...purchaseDraft, referenceNumber: value })} />
+            <Field label="Batch number" value={purchaseDraft.batchNumber} onChange={(value) => setPurchaseDraft({ ...purchaseDraft, batchNumber: value })} />
+            <Field label="Order quantity" type="number" value={purchaseDraft.quantity} onChange={(value) => setPurchaseDraft({ ...purchaseDraft, quantity: value })} />
+            <Field label="Unit cost" type="number" value={purchaseDraft.unitCost} onChange={(value) => setPurchaseDraft({ ...purchaseDraft, unitCost: value })} />
+            <Field label="Batch expiration" type="date" value={purchaseDraft.expirationDate} onChange={(value) => setPurchaseDraft({ ...purchaseDraft, expirationDate: value })} />
+          </div>
+          <button onClick={() => void createPurchase()} disabled={!state.suppliers.length || !state.medicines.length} className="mt-4 rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Create purchase order</button>
+          <div className="mt-5 divide-y divide-slate-100">
+            {state.purchases.length === 0 ? <div className="py-3 text-sm text-slate-500">No purchase orders.</div> : state.purchases.map((purchase) => <div key={purchase.id} className="flex flex-wrap items-center justify-between gap-2 py-3 text-xs"><div><div className="font-semibold text-slate-800">{purchase.referenceNumber} · {state.suppliers.find((supplier) => supplier.id === purchase.supplierId)?.supplierName ?? purchase.supplierId}</div><div className="mt-1 text-slate-500">{fmt(purchase.totalAmount)} · {purchase.status}</div></div>{purchase.status === "PENDING" && <div className="flex gap-3"><button onClick={() => void receivePurchase(purchase.id)} className="font-semibold text-teal-700">Receive</button><button onClick={() => void cancelPurchase(purchase.id)} className="font-semibold text-rose-700">Cancel</button></div>}</div>)}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <h2 className="mb-4 text-sm font-bold text-slate-900">Stock movement</h2>
+          <div className="space-y-3">
+            <div><label htmlFor="movement-batch" className="mb-1 block text-xs font-semibold text-slate-600">Batch</label><select id="movement-batch" value={movementDraft.batchId} onChange={(event) => setMovementDraft({ ...movementDraft, batchId: event.target.value })} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">{state.medicineBatches.map((batch) => <option key={batch.id} value={batch.id}>{state.medicines.find((medicine) => medicine.id === batch.medicineId)?.brandName ?? batch.medicineId} · {batch.batchNumber} · {batch.expirationDate} · {batch.quantity} units</option>)}</select></div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div><label htmlFor="movement-type" className="mb-1 block text-xs font-semibold text-slate-600">Reason</label><select id="movement-type" value={movementDraft.movement} onChange={(event) => { const movement = event.target.value; setMovementDraft({ ...movementDraft, movement, direction: movement === "RETURN" ? "IN" : "OUT" }); }} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm"><option value="ADJUSTMENT">Adjustment</option><option value="RETURN">Return</option><option value="DAMAGED">Damaged</option><option value="EXPIRED">Expired</option></select></div>
+              <div><label htmlFor="movement-direction" className="mb-1 block text-xs font-semibold text-slate-600">Stock change</label><select id="movement-direction" value={movementDraft.direction} onChange={(event) => setMovementDraft({ ...movementDraft, direction: event.target.value as "IN" | "OUT" })} disabled={movementDraft.movement === "DAMAGED" || movementDraft.movement === "EXPIRED"} className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm"><option value="IN">Add to stock</option><option value="OUT">Remove from stock</option></select></div>
+            </div>
+            <Field label="Movement quantity" type="number" value={movementDraft.quantity} onChange={(value) => setMovementDraft({ ...movementDraft, quantity: value })} />
+            <Field label="Notes" value={movementDraft.notes} onChange={(value) => setMovementDraft({ ...movementDraft, notes: value })} />
+            <button onClick={() => void recordMovement()} disabled={!state.medicineBatches.length} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">Record movement</button>
+          </div>
+          {operationError && <div role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{operationError}</div>}
+          <div className="mt-5 border-t border-slate-100 pt-3"><div className="mb-2 text-xs font-bold text-slate-700">Recent movements</div>{state.inventoryTransactions.slice(0, 6).map((movement) => <div key={movement.id} className="flex justify-between gap-2 border-b border-slate-50 py-2 text-[10px] text-slate-600"><span>{movement.transactionType} · {state.medicines.find((medicine) => medicine.id === movement.medicineId)?.brandName ?? movement.medicineId}</span><span>{movement.quantity > 0 ? "+" : ""}{movement.quantity} · {new Date(movement.timestamp).toLocaleDateString()}</span></div>)}</div>
+        </section>
       </div>
 
       {modal && (
@@ -788,12 +964,12 @@ function InventoryPage({ state, setState, apiToken }: { state: PharmacyState; se
               <Field label="Brand name" value={draft.brandName ?? ""} onChange={(value) => setDraft({ ...draft, brandName: value })} />
               <Field label="Generic name" value={draft.genericName ?? ""} onChange={(value) => setDraft({ ...draft, genericName: value })} />
               <Field label="Barcode" value={draft.barcode ?? ""} onChange={(value) => setDraft({ ...draft, barcode: value })} />
-              <Field label="Batch" value={draft.batchNumber ?? ""} onChange={(value) => setDraft({ ...draft, batchNumber: value })} />
+              {modal.mode === "Add" ? <Field label="Batch" value={draft.batchNumber ?? ""} onChange={(value) => setDraft({ ...draft, batchNumber: value })} /> : <div className="md:col-span-2 rounded-xl bg-slate-50 p-3"><div className="mb-2 text-xs font-semibold text-slate-700">Stock batches</div><div className="space-y-1">{state.medicineBatches.filter((batch) => batch.medicineId === modal.item?.id).map((batch) => <div key={batch.id} className="flex justify-between gap-3 text-xs text-slate-600"><span>{batch.batchNumber} · expires {batch.expirationDate}</span><span className="font-semibold">{batch.quantity} units</span></div>)}</div><div className="mt-2 text-[10px] text-slate-500">Use receiving or stock adjustment to change batch stock.</div></div>}
               <Field label="Strength" value={draft.strength ?? ""} onChange={(value) => setDraft({ ...draft, strength: value })} />
               <Field label="Price" type="number" value={String(draft.unitPrice ?? 0)} onChange={(value) => setDraft({ ...draft, unitPrice: Number(value) })} />
-              <Field label="Quantity" type="number" value={String(draft.quantity ?? 0)} onChange={(value) => setDraft({ ...draft, quantity: Number(value) })} />
+              {modal.mode === "Add" && <Field label="Initial quantity" type="number" value={String(draft.quantity ?? 0)} onChange={(value) => setDraft({ ...draft, quantity: Number(value) })} />}
               <Field label="Reorder level" type="number" value={String(draft.reorderLevel ?? 10)} onChange={(value) => setDraft({ ...draft, reorderLevel: Number(value) })} />
-              <Field label="Expiration date" type="date" value={draft.expirationDate ?? "2027-01-01"} onChange={(value) => setDraft({ ...draft, expirationDate: value })} />
+              {modal.mode === "Add" && <Field label="Expiration date" type="date" value={draft.expirationDate ?? "2027-01-01"} onChange={(value) => setDraft({ ...draft, expirationDate: value })} />}
               <div>
                 <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Supplier</div>
                 <select value={draft.supplierId ?? state.suppliers[0]?.id ?? ""} onChange={(e) => setDraft({ ...draft, supplierId: e.target.value })} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm">
@@ -829,11 +1005,13 @@ function InventoryPage({ state, setState, apiToken }: { state: PharmacyState; se
           </div>
         </div>
       )}
+      {referenceLoading && <div role="status" className="rounded-lg bg-white p-3 text-sm text-slate-500">Loading medicine reference...</div>}
+      {referenceMedicine && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"><section className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white shadow-2xl"><header className="flex items-start justify-between gap-4 border-b border-slate-100 p-5"><div><h2 className="text-lg font-bold text-slate-900">{referenceMedicine.brandName}</h2><p className="mt-1 text-xs text-slate-500">{referenceMedicine.genericName} · {referenceMedicine.strength}</p></div><button aria-label="Close medicine reference" onClick={() => setReferenceMedicine(null)} className="rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-600">Close</button></header><div className="space-y-4 p-5"><div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900">{referenceMedicine.notice}</div><p className="text-sm text-slate-700">{referenceMedicine.description || "No description provided."}</p><div className="grid gap-3 sm:grid-cols-2">{[["Dosage information",referenceMedicine.dosageInformation],["Precautions",referenceMedicine.precautions],["Contraindications",referenceMedicine.contraindications],["Storage",referenceMedicine.storageInformation]].map(([label,value]) => <div key={label} className="rounded-lg bg-slate-50 p-3"><div className="text-xs font-semibold text-slate-700">{label}</div><div className="mt-1 text-xs text-slate-600">{value || "Not specified."}</div></div>)}</div><div className="border-t border-slate-100 pt-3"><div className="mb-2 text-xs font-bold text-slate-700">Batch stock</div>{referenceMedicine.batches.map((batch) => <div key={batch.id} className="flex justify-between gap-3 py-1 text-xs text-slate-600"><span>{batch.batchNumber} · expires {batch.expirationDate}</span><span>{batch.quantity} units</span></div>)}</div></div></section></div>}
     </div>
   );
 }
 
-function SuppliersPage({ state, setState, apiToken }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>>; apiToken: string | null }) {
+function SuppliersPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => Promise<PharmacyState> }) {
   const [draft, setDraft] = useState<Partial<Supplier>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -844,32 +1022,17 @@ function SuppliersPage({ state, setState, apiToken }: { state: PharmacyState; se
     }
 
     try {
-      const response = await fetch(editingId ? `/api/suppliers/${editingId}` : "/api/suppliers", {
-        method: editingId ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiToken}` },
-        body: JSON.stringify(draft),
-      });
-      const result = response.status === 204 ? null : await response.json();
-      if (!response.ok) throw new Error(result?.error ?? "Unable to save supplier.");
-      setState(await loadPharmacyState(apiToken));
+      await api.saveSupplier(editingId ?? undefined, draft);
+      await onRefresh();
       setDraft({});
       setEditingId(null);
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Unable to save supplier.");
-    }
+    } catch (error) { window.alert(errorMessage(error)); }
   };
 
   const remove = async (id: string) => {
-    try {
-      const response = await fetch(`/api/suppliers/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${apiToken}` } });
-      if (!response.ok) {
-        const result = await response.json();
-        throw new Error(result.error ?? "Unable to delete supplier.");
-      }
-      setState(await loadPharmacyState(apiToken));
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Unable to delete supplier.");
-    }
+    if (!window.confirm("Deactivate this supplier?")) return;
+    try { await api.archiveSupplier(id); await onRefresh(); }
+    catch (error) { window.alert(errorMessage(error)); }
   };
 
   return (
@@ -912,48 +1075,61 @@ function SuppliersPage({ state, setState, apiToken }: { state: PharmacyState; se
   );
 }
 
-function UsersPage({ state, setState, apiToken }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>>; apiToken: string | null }) {
+function UsersPage({ state, onRefresh, currentUser }: { state: PharmacyState; onRefresh: () => Promise<PharmacyState>; currentUser: PharmacyUser }) {
   const [draft, setDraft] = useState<Partial<PharmacyUser & { password: string }>>({ password: "" });
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [resetUserId, setResetUserId] = useState<string | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
 
   const save = async () => {
-    if (!draft.username || !draft.fullName || !draft.email || !draft.password || draft.password.length < 8) {
-      window.alert("Username, full name, email and a password of at least 8 characters are required.");
+    if (!draft.fullName || !draft.email || (!editingUserId && !draft.username)) {
+      window.alert("Username, full name and email are required.");
       return;
     }
-
-    try {
-      const response = await fetch("/api/users", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiToken}` },
-        body: JSON.stringify({ username: draft.username, fullName: draft.fullName, email: draft.email, password: draft.password, role: draft.role ?? "CASHIER" }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error ?? "Unable to create user.");
-      setState(await loadPharmacyState(apiToken));
-      setDraft({ password: "" });
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : "Unable to create user.");
+    if (!editingUserId && String(draft.password ?? "").length < 10) {
+      window.alert("Use a password with at least 10 characters.");
+      return;
     }
+    try {
+      if (editingUserId) await api.updateUser(editingUserId, { fullName: draft.fullName, email: draft.email, role: draft.role ?? "CASHIER" });
+      else await api.createUser({ username: String(draft.username), fullName: String(draft.fullName), email: String(draft.email), password: String(draft.password), role: draft.role ?? "CASHIER" });
+      await onRefresh();
+      setDraft({ password: "" });
+      setEditingUserId(null);
+    } catch (error) { window.alert(errorMessage(error)); }
+  };
+
+  const deactivate = async (user: PharmacyUser) => {
+    if (user.id === currentUser.id || !window.confirm(`Deactivate ${user.fullName}? Their active sessions will be closed.`)) return;
+    try { await api.deactivateUser(user.id); await onRefresh(); }
+    catch (error) { window.alert(errorMessage(error)); }
+  };
+
+  const submitPasswordReset = async () => {
+    if (!resetUserId || resetPassword.length < 10) { window.alert("Use a password with at least 10 characters."); return; }
+    try { await api.resetUserPassword(resetUserId, resetPassword); await onRefresh(); setResetPassword(""); setResetUserId(null); }
+    catch (error) { window.alert(errorMessage(error)); }
   };
 
   return (
     <div className="space-y-4">
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 text-lg font-bold text-slate-900">Create user</div>
+        <div className="mb-4 text-lg font-bold text-slate-900">{editingUserId ? "Edit user" : "Create user"}</div>
         <div className="grid gap-3 md:grid-cols-2">
-          <Field label="Username" value={draft.username ?? ""} onChange={(value) => setDraft({ ...draft, username: value })} />
+          {!editingUserId && <Field label="Username" value={draft.username ?? ""} onChange={(value) => setDraft({ ...draft, username: value })} />}
           <Field label="Full name" value={draft.fullName ?? ""} onChange={(value) => setDraft({ ...draft, fullName: value })} />
           <Field label="Email" value={draft.email ?? ""} onChange={(value) => setDraft({ ...draft, email: value })} />
-          <Field label="Password" type="password" value={draft.password ?? ""} onChange={(value) => setDraft({ ...draft, password: value })} />
+          {!editingUserId && <Field label="Password" type="password" value={draft.password ?? ""} onChange={(value) => setDraft({ ...draft, password: value })} />}
           <div>
-            <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Role</div>
-            <select value={draft.role ?? "CASHIER"} onChange={(e) => setDraft({ ...draft, role: e.target.value as UserRole })} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm">
+            <label htmlFor="user-role" className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Role</label>
+            <select id="user-role" value={draft.role ?? "CASHIER"} disabled={editingUserId === currentUser.id} onChange={(e) => setDraft({ ...draft, role: e.target.value as UserRole })} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm disabled:opacity-60">
               {['ADMIN', 'PHARMACIST', 'CASHIER'].map((role) => <option key={role}>{role}</option>)}
             </select>
           </div>
         </div>
         <div className="mt-4 flex justify-end">
-          <button onClick={save} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-teal-500">Create account</button>
+          {editingUserId && <button onClick={() => { setEditingUserId(null); setDraft({ password: "" }); }} className="mr-3 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button>}
+          <button onClick={save} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-teal-500">{editingUserId ? "Save user" : "Create account"}</button>
         </div>
       </div>
 
@@ -966,7 +1142,15 @@ function UsersPage({ state, setState, apiToken }: { state: PharmacyState; setSta
                 <div className="text-sm font-semibold text-slate-800">{user.fullName}</div>
                 <div className="text-xs text-slate-500">{user.username} · {user.role}</div>
               </div>
-              <div className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-slate-700">{user.status}</div>
+              <div className="flex flex-wrap items-center gap-3">
+                {user.status === "ACTIVE" && <>
+                  <button onClick={() => { setEditingUserId(user.id); setDraft({ fullName: user.fullName, email: user.email, role: user.role, username: user.username, password: "" }); }} className="text-xs font-semibold text-teal-700">Edit</button>
+                  <button onClick={() => void deactivate(user)} disabled={user.id === currentUser.id} className="text-xs font-semibold text-rose-700 disabled:opacity-40">Deactivate</button>
+                  <button onClick={() => { setResetUserId(resetUserId === user.id ? null : user.id); setResetPassword(""); }} disabled={user.id === currentUser.id} className="text-xs font-semibold text-slate-700 disabled:opacity-40">Reset password</button>
+                </>}
+                <div className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-slate-700">{user.status}</div>
+              </div>
+              {resetUserId === user.id && <div className="mt-3 flex gap-2"><input type="password" autoComplete="new-password" value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} aria-label={`New password for ${user.fullName}`} placeholder="New password (10+ characters)" className="min-w-0 rounded-lg border border-slate-200 px-3 py-2 text-xs" /><button onClick={() => void submitPasswordReset()} className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white">Save password</button></div>}
             </div>
           ))}
         </div>
@@ -975,25 +1159,77 @@ function UsersPage({ state, setState, apiToken }: { state: PharmacyState; setSta
   );
 }
 
-function AuditPage({ logs }: { logs: AuditLog[] }) {
+function AuditPage() {
+  const [page, setPage] = useState(1);
+  const [filters, setFilters] = useState({ actor: "", action: "", entityType: "", search: "" });
+  const [applied, setApplied] = useState(filters);
+  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError("");
+    void api.audit({ page, pageSize: 25, ...applied }).then((result) => {
+      if (!active) return;
+      setLogs(result.logs);
+      setTotal(result.total);
+      setTotalPages(Math.max(1, result.totalPages));
+    }).catch((reason) => {
+      if (active) setError(errorMessage(reason));
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [page, applied]);
+
+  const applyFilters = () => { setPage(1); setApplied({ ...filters }); };
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-100 p-4 text-sm font-bold text-slate-900">Audit trail</div>
+      <div className="flex flex-col gap-3 border-b border-slate-100 p-4 md:flex-row md:items-end md:justify-between">
+        <div><div className="text-sm font-bold text-slate-900">Audit trail</div><div className="mt-1 text-xs text-slate-500">{total.toLocaleString()} recorded events</div></div>
+        <div className="grid flex-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <input aria-label="Filter audit by person" value={filters.actor} onChange={(event) => setFilters({ ...filters, actor: event.target.value })} placeholder="Person or username" className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs" />
+          <input aria-label="Filter audit by action" value={filters.action} onChange={(event) => setFilters({ ...filters, action: event.target.value })} placeholder="Action" className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs" />
+          <input aria-label="Filter audit by record type" value={filters.entityType} onChange={(event) => setFilters({ ...filters, entityType: event.target.value })} placeholder="Record type" className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs" />
+          <div className="flex gap-2"><input aria-label="Search audit details" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} placeholder="Search details" className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs" /><button onClick={applyFilters} className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white">Apply</button></div>
+        </div>
+      </div>
+      {error && <div role="alert" className="m-4 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{error} <button onClick={() => applyFilters()} className="ml-2 font-semibold underline">Retry</button></div>}
       <div className="overflow-x-auto">
         <table className="min-w-full text-left text-sm">
           <thead className="bg-slate-50 text-slate-600">
             <tr>
+              <th className="px-4 py-3">Who</th>
               <th className="px-4 py-3">Action</th>
-              <th className="px-4 py-3">Entity</th>
+              <th className="px-4 py-3">Record</th>
+              <th className="px-4 py-3">Details</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Timestamp</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
+            {!loading && logs.length === 0 && <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-500">No audit events match these filters.</td></tr>}
+            {loading && <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-500">Loading audit events...</td></tr>}
             {logs.map((log) => (
               <tr key={log.id}>
+                <td className="px-4 py-3">
+                  <div className="font-semibold text-slate-800">{log.actorName ?? (typeof log.metadata.username === "string" ? log.metadata.username : "System")}</div>
+                  {log.actorUsername && <div className="text-xs text-slate-500">@{log.actorUsername}</div>}
+                </td>
                 <td className="px-4 py-3 font-medium text-slate-800">{log.action}</td>
-                <td className="px-4 py-3 text-xs text-slate-600">{log.entityType} · {log.entityId}</td>
+                <td className="px-4 py-3 text-xs text-slate-600">
+                  <div className="font-medium">{log.entityName ?? log.entityId}</div>
+                  <div>{log.entityType} · {log.entityId}</div>
+                </td>
+                <td className="max-w-sm px-4 py-3 text-xs text-slate-600">
+                  <details>
+                    <summary className="cursor-pointer font-semibold text-teal-700">View details</summary>
+                    <pre className="mt-2 max-w-sm whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-2 text-[10px]">{JSON.stringify(log.metadata, null, 2)}</pre>
+                  </details>
+                </td>
                 <td className="px-4 py-3"><span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-[0.2em] ${log.success ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{log.success ? 'Success' : 'Failure'}</span></td>
                 <td className="px-4 py-3 text-xs text-slate-500">{new Date(log.timestamp).toLocaleString()}</td>
               </tr>
@@ -1001,54 +1237,71 @@ function AuditPage({ logs }: { logs: AuditLog[] }) {
           </tbody>
         </table>
       </div>
+      <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-xs text-slate-600"><span>Page {page} of {totalPages}</span><div className="flex gap-2"><button onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1 || loading} className="rounded-lg border border-slate-200 px-3 py-1.5 disabled:opacity-40">Previous</button><button onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={page >= totalPages || loading} className="rounded-lg border border-slate-200 px-3 py-1.5 disabled:opacity-40">Next</button></div></div>
     </div>
   );
 }
 
+function BackupsPage() {
+  const [backups, setBackups] = useState<import("./api").BackupRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    void api.backups().then((result) => { if (active) setBackups(result.backups); }).catch((reason) => { if (active) setError(errorMessage(reason)); }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [reloadKey]);
+
+  const createBackup = async () => {
+    setCreating(true);
+    setError("");
+    try { await api.createBackup(); setReloadKey((key) => key + 1); }
+    catch (reason) { setError(errorMessage(reason)); setReloadKey((key) => key + 1); }
+    finally { setCreating(false); }
+  };
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-100 p-4"><div><h2 className="text-sm font-bold text-slate-900">Database backups</h2><p className="mt-1 text-xs text-slate-500">{backups.length} recent backup records</p></div><button onClick={() => void createBackup()} disabled={creating} className="rounded-lg bg-teal-700 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{creating ? "Creating backup..." : "Create backup"}</button></div>
+      {error && <div role="alert" className="m-4 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{error}</div>}
+      <div className="divide-y divide-slate-100">
+        {loading && <div className="p-4 text-sm text-slate-500">Loading backup history...</div>}
+        {!loading && backups.length === 0 && <div className="p-8 text-center text-sm text-slate-500">No backups have been requested.</div>}
+        {backups.map((backup) => <div key={backup.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><div className="text-sm font-semibold text-slate-800">{backup.fileName ?? backup.id}</div><div className="mt-1 text-xs text-slate-500">Requested by {backup.requestedBy ?? "Unknown"} · {new Date(backup.requestedAt).toLocaleString()}</div>{backup.errorMessage && <div className="mt-1 text-xs text-rose-700">{backup.errorMessage}</div>}</div><div className="flex items-center gap-3"><span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase ${backup.status === "COMPLETED" ? "bg-emerald-50 text-emerald-700" : backup.status === "FAILED" ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-700"}`}>{backup.status}</span>{backup.fileSizeBytes != null && <span className="text-xs text-slate-500">{(backup.fileSizeBytes / 1048576).toFixed(2)} MB</span>}{backup.status === "COMPLETED" && <a href={`/api/backups/${encodeURIComponent(backup.id)}/download`} className="text-xs font-semibold text-teal-700">Download</a>}</div></div>)}
+      </div>
+    </section>
+  );
+}
+
 function ReportsPage({ state }: { state: PharmacyState }) {
+  const [report, setReport] = useState<ReportData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [filters, setFilters] = useState(() => ({ from: `${today().slice(0, 4)}-01-01`, to: today() }));
+  const [applied, setApplied] = useState(filters);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError("");
+    void api.reports(applied).then((result) => { if (active) setReport(result); }).catch((reason) => { if (active) setError(errorMessage(reason)); }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [applied]);
+
   const sales = state.sales.filter((sale) => sale.status === "COMPLETED");
-  const totalRevenue = sales.reduce((sum, sale) => sum + sale.totalAmount, 0);
-  const inventoryValue = state.medicines.reduce((sum, medicine) => sum + medicine.unitPrice * medicine.quantity, 0);
-  const totalUnits = sales.flatMap((sale) => sale.items).reduce((sum, item) => sum + item.quantity, 0);
-  const lowStock = state.medicines.filter((medicine) => medicine.quantity <= medicine.reorderLevel).length;
-  const reportAnchor = sales.length ? new Date(Math.max(...sales.map((sale) => new Date(sale.transactionDate).getTime()))) : new Date();
-  const reportMonths = Array.from({ length: 6 }, (_, index) => new Date(reportAnchor.getFullYear(), reportAnchor.getMonth() - 5 + index, 1));
-  const monthlyRevenue = reportMonths.map((date) => ({
-    month: date.toLocaleString("en-US", { month: "short" }),
-    revenue: sales.filter((sale) => { const saleDate = new Date(sale.transactionDate); return saleDate.getFullYear() === date.getFullYear() && saleDate.getMonth() === date.getMonth(); }).reduce((sum, sale) => sum + sale.totalAmount, 0),
-  }));
-
-  const byPayment = Object.entries(
-    sales.reduce<Record<string, number>>((acc, sale) => {
-      acc[sale.paymentMethod] = (acc[sale.paymentMethod] ?? 0) + sale.totalAmount;
-      return acc;
-    }, {})
-  ).map(([name, value]) => ({ name, value }));
-
-  const byCategory = Object.entries(
-    sales.flatMap((sale) => sale.items).reduce<Record<string, number>>((acc, item) => {
-      const medicine = state.medicines.find((entry) => entry.id === item.medicineId);
-      const category = medicine?.medicineType ?? "Other";
-      acc[category] = (acc[category] ?? 0) + item.quantity;
-      return acc;
-    }, {})
-  ).map(([name, value]) => ({ name, value }));
-
-  const topSelling = Object.entries(
-    sales.flatMap((sale) => sale.items).reduce<Record<string, { quantity: number; revenue: number }>>((acc, item) => {
-      const current = acc[item.medicineName] ?? { quantity: 0, revenue: 0 };
-      acc[item.medicineName] = { quantity: current.quantity + item.quantity, revenue: current.revenue + item.subtotal };
-      return acc;
-    }, {})
-  ).map(([name, value]) => ({ name, ...value })).sort((a, b) => b.quantity - a.quantity).slice(0, 5);
-
-  const movement = reportMonths.map((date) => {
-    const month = date.toLocaleString("en-US", { month: "short" });
-    const monthSales = sales.filter((sale) => { const saleDate = new Date(sale.transactionDate); return saleDate.getFullYear() === date.getFullYear() && saleDate.getMonth() === date.getMonth(); });
-    const dispensed = monthSales.flatMap((sale) => sale.items).reduce((sum, item) => sum + item.quantity, 0);
-    const received = state.inventoryTransactions.filter((transaction) => { const transactionDate = new Date(transaction.timestamp); return transaction.transactionType === "PURCHASE" && transactionDate.getFullYear() === date.getFullYear() && transactionDate.getMonth() === date.getMonth(); }).reduce((sum, transaction) => sum + transaction.quantity, 0);
-    return { month, dispensed, received };
-  });
+  const totalRevenue = report?.summary.totalRevenue ?? 0;
+  const inventoryValue = report?.inventory.value ?? 0;
+  const totalUnits = report?.summary.totalUnits ?? 0;
+  const lowStock = report?.inventory.low_stock_count ?? 0;
+  const monthlyRevenue = (report?.monthly ?? []).map((entry) => ({ month: new Date(`${entry.month}-01T12:00:00`).toLocaleString("en", { month: "short" }), revenue: entry.revenue }));
+  const byPayment = report?.payment ?? [];
+  const byCategory = report?.category ?? [];
+  const topSelling = report?.topSelling ?? [];
+  const movement = (report?.movement ?? []).map((entry) => ({ ...entry, month: new Date(`${entry.month}-01T12:00:00`).toLocaleString("en", { month: "short" }) }));
 
   const download = (name: string, rows: string[][]) => {
     const csv = rows.map((row) => row.map((value) => `"${value.replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -1060,21 +1313,40 @@ function ReportsPage({ state }: { state: PharmacyState }) {
     URL.revokeObjectURL(url);
   };
 
-  const exportSales = () => download("sales-transaction-log.csv", [["Transaction", "Date", "Cashier", "Payment", "Total"], ...sales.map((sale) => [sale.id, sale.transactionDate, sale.cashierName, sale.paymentMethod, String(sale.totalAmount)])]);
+  const exportSales = async () => {
+    try {
+      const blob = await api.salesReportCsv(applied);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `sales-${applied.from}-${applied.to}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (reason) { setError(errorMessage(reason)); }
+  };
   const exportInventory = () => download("inventory-report.csv", [["Medicine", "Barcode", "Stock", "Reorder level", "Unit price", "Expiration"], ...state.medicines.map((medicine) => [medicine.brandName, medicine.barcode, String(medicine.quantity), String(medicine.reorderLevel), String(medicine.unitPrice), medicine.expirationDate])]);
 
   return (
     <div className="space-y-5">
       <div className="flex flex-col justify-between gap-3 md:flex-row md:items-end">
         <div><div className="text-2xl font-bold text-slate-900">Reports &amp; Analytics</div><div className="text-xs text-slate-500">Revenue, inventory movement, and sales performance</div></div>
-        <button onClick={() => exportSales()} className="inline-flex items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 py-2.5 text-xs font-bold text-white hover:bg-teal-600">Export all reports</button>
+        <div className="flex flex-wrap items-end gap-2">
+          <Field label="From date" type="date" value={filters.from} onChange={(from) => setFilters({ ...filters, from })} />
+          <Field label="To date" type="date" value={filters.to} onChange={(to) => setFilters({ ...filters, to })} />
+          <button onClick={() => setApplied({ ...filters })} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700">Apply dates</button>
+          <button onClick={() => exportSales()} className="inline-flex items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 py-2.5 text-xs font-bold text-white hover:bg-teal-600">Export sales</button>
+        </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <ReportMetric label="YTD Revenue" value={fmt(totalRevenue)} note={`${sales.length} completed transactions`} color="text-teal-700" />
-        <ReportMetric label="Total Transactions" value={sales.length.toLocaleString()} note="Completed sales in the system" color="text-slate-900" />
+      {error && <div role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{error} <button onClick={() => setApplied({ ...applied })} className="ml-2 font-semibold underline">Retry</button></div>}
+      {loading && <div className="rounded-lg bg-white p-3 text-sm text-slate-500">Loading reports...</div>}
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <ReportMetric label="Revenue in range" value={fmt(totalRevenue)} note={`${report?.summary.transactions ?? 0} completed transactions`} color="text-teal-700" />
+        <ReportMetric label="Total Transactions" value={(report?.summary.transactions ?? 0).toLocaleString()} note="Completed sales" color="text-slate-900" />
         <ReportMetric label="Medicines Dispensed" value={totalUnits.toLocaleString()} note="Units recorded on sales" color="text-slate-900" />
-        <ReportMetric label="Average Basket Size" value={fmt(totalRevenue / Math.max(1, sales.length))} note={`${lowStock} low-stock items`} color="text-teal-700" />
+        <ReportMetric label="Average Basket Size" value={fmt(report?.summary.averageBasket ?? 0)} note="Per completed transaction" color="text-teal-700" />
+        <ReportMetric label="Inventory Value" value={fmt(inventoryValue)} note={`${lowStock} low stock · ${report?.inventory.expiring_soon_count ?? 0} expiring soon`} color="text-slate-900" />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[1.55fr_1fr]">
@@ -1112,21 +1384,15 @@ function ReportDownload({ title, format, description, onClick }: { title: string
   return <button onClick={onClick} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-teal-300 hover:bg-white"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-teal-700 shadow-sm">↓</span><span className="min-w-0 flex-1"><span className="block text-xs font-bold text-slate-800">{title} <span className="ml-1 rounded bg-teal-50 px-1.5 py-0.5 text-[9px] font-bold text-teal-700">{format}</span></span><span className="mt-0.5 block truncate text-[10px] text-slate-500">{description}</span></span><span className="text-xs font-bold text-teal-700">↓</span></button>;
 }
 
-function BrandMark({ large = false, className = "" }: { large?: boolean; className?: string }) {
-  return (
-    <img
-      src={logoImage}
-      alt="Pharmacy logo"
-      className={`object-contain ${large ? "h-24 w-24 sm:h-28 sm:w-28" : "h-10 w-10"} ${className}`.trim()}
-    />
-  );
+function BrandMark({ large = false }: { large?: boolean }) {
+  return <span aria-hidden="true" className={`brand-mark ${large ? "brand-mark-large" : ""}`}><span /></span>;
 }
 
 function Field({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
   return (
     <div>
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">{label}</div>
-      <input type={type} value={value} onChange={(e) => onChange(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
+      <label htmlFor={`field-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`} className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">{label}</label>
+      <input id={`field-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`} type={type} value={value} onChange={(e) => onChange(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm" />
     </div>
   );
 }
