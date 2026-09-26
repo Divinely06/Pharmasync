@@ -575,7 +575,8 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
       lines.push({ id: medicine.id, brandName: medicine.brand_name, quantity: item.quantity, unitPrice: Number(medicine.unit_price), subtotal: Number(medicine.unit_price) * item.quantity, allocations });
     }
     const subtotal = Number(lines.reduce((sum, line) => sum + line.subtotal, 0).toFixed(2));
-    const discount = Number(body.discount ?? 0);
+    if (body.discountType !== "none" && !body.discountId.trim()) throw Object.assign(new Error("A valid PWD or senior citizen ID is required for this discount"), { status: 400, code: "DISCOUNT_ID_REQUIRED" });
+    const discount = body.discountType !== "none" ? Number((subtotal * 0.2).toFixed(2)) : Number(body.discount ?? 0);
     if (discount > subtotal) throw Object.assign(new Error("Discount cannot exceed subtotal"), { status: 400, code: "INVALID_INPUT" });
     const tax = Number((subtotal * 0.1).toFixed(2));
     const total = Number((subtotal - discount + tax).toFixed(2));
@@ -608,7 +609,7 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
         const stock = await client.query("UPDATE medicines SET quantity=quantity-$1,updated_at=now() WHERE id=$2 RETURNING quantity", [line.quantity,line.id]);
         await client.query("INSERT INTO inventory_transactions (id,medicine_id,transaction_type,quantity,previous_quantity,resulting_quantity,reference_id,performed_by,notes) VALUES ($1,$2,'SALE',$3,$4,$5,$6,$7,$8)", [`inv-${randomUUID()}`,line.id,line.quantity,stock.rows[0].quantity+line.quantity,stock.rows[0].quantity,saleId,req.user!.id,`POS sale ${saleId}`]);
       }
-      await audit(client,req.user!.id,"SALE_COMPLETED","SALE",saleId,{ total,paymentMethod:body.paymentMethod, simulated:!cash });
+      await audit(client,req.user!.id,"SALE_COMPLETED","SALE",saleId,{ total,paymentMethod:body.paymentMethod, discountType:body.discountType, discountId:body.discountId || null, simulated:!cash });
       if (!cash) await audit(client,req.user!.id,"PAYMENT_PAID","PAYMENT",paymentId!,{ provider:"DUMMY",saleId });
     } else {
       if (paymentStatus !== "PENDING") await client.query("UPDATE sales SET status='VOIDED' WHERE id=$1", [saleId]);
@@ -768,7 +769,8 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   const code = (error as { code?: string }).code;
   if (code === "23505") return res.status(409).json({ code: "CONFLICT", error: "A record with these details already exists" });
   if (code === "23503") return res.status(400).json({ code: "INVALID_REFERENCE", error: "A referenced record does not exist" });
-  res.status(500).json({ code: "INTERNAL_ERROR", error: "The request could not be completed" });
+  const status = typeof (error as { status?: unknown }).status === "number" ? Number((error as { status: number }).status) : 500;
+  res.status(status).json({ code: code ?? (status >= 500 ? "INTERNAL_ERROR" : "REQUEST_FAILED"), error: status >= 500 ? "The request could not be completed" : (error instanceof Error ? error.message : "The request could not be completed") });
 });
 
 const port = Number(process.env.PORT ?? process.env.API_PORT ?? 8787);

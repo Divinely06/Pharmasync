@@ -106,6 +106,8 @@ export const passwordResetSchema = z.object({ password: z.string().min(10).max(2
 export const saleSchema = z.object({
   items: z.array(z.object({ medicineId: requiredText(100), quantity: z.coerce.number().int().positive() })).min(1).max(100).refine((items) => new Set(items.map((item) => item.medicineId)).size === items.length, "Each medicine may only appear once"),
   discount: nonNegativeMoney.default(0),
+  discountType: z.enum(["none", "pwd", "senior"]).default("none"),
+  discountId: z.string().trim().max(100).default(""),
   paymentMethod: z.enum(["Cash", "GCash", "Maya", "Card"]),
   amountReceived: nonNegativeMoney.optional(),
   idempotencyKey: requiredText(100),

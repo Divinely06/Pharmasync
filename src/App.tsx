@@ -66,7 +66,7 @@ const hydrateState = (source: PharmacyState): PharmacyState => ({
   })),
 });
 
-const errorMessage = (error: unknown) => error instanceof Error ? error.message : "The request could not be completed.";
+const errorMessage = (error: unknown) => error instanceof ApiError ? `${error.message} (${error.status}${error.code ? ` · ${error.code}` : ""})` : error instanceof Error ? error.message : "The request could not be completed.";
 const dateKey = (value: string | Date) => new Date(value).toLocaleDateString("en-CA");
 const today = () => dateKey(new Date());
 
@@ -79,7 +79,7 @@ function App() {
   const [loginError, setLoginError] = useState("");
   const [appError, setAppError] = useState("");
   const [booting, setBooting] = useState(true);
-  const [inventoryFilter, setInventoryFilter] = useState<"all" | "low-stock">("all");
+  const [inventoryFilter, setInventoryFilter] = useState<"all" | "low-stock" | "expiring-soon">("all");
 
   useEffect(() => {
     let active = true;
@@ -212,7 +212,11 @@ function App() {
     setInventoryFilter("low-stock");
     navigate("inventory");
   };
-  return <SystemShell {...{ state, page, setPage, mobileOpen, setMobileOpen, currentUser, logout, lowStockCount, todayRevenue, visibleNav, refreshData, appError, setAppError, navigate, inventoryFilter, setInventoryFilter, showLowStock }} />;
+  const showExpiringSoon = () => {
+    setInventoryFilter("expiring-soon");
+    navigate("inventory");
+  };
+  return <SystemShell {...{ state, page, setPage, mobileOpen, setMobileOpen, currentUser, logout, lowStockCount, todayRevenue, visibleNav, refreshData, appError, setAppError, navigate, inventoryFilter, setInventoryFilter, showLowStock, showExpiringSoon }} />;
 }
 
 function SystemShell({
@@ -233,6 +237,7 @@ function SystemShell({
   inventoryFilter,
   setInventoryFilter,
   showLowStock,
+  showExpiringSoon,
 }: {
   state: PharmacyState;
   page: Page;
@@ -248,9 +253,10 @@ function SystemShell({
   appError: string;
   setAppError: React.Dispatch<React.SetStateAction<string>>;
   navigate: (page: Page) => void;
-  inventoryFilter: "all" | "low-stock";
-  setInventoryFilter: React.Dispatch<React.SetStateAction<"all" | "low-stock">>;
+  inventoryFilter: "all" | "low-stock" | "expiring-soon";
+  setInventoryFilter: React.Dispatch<React.SetStateAction<"all" | "low-stock" | "expiring-soon">>;
   showLowStock: () => void;
+  showExpiringSoon: () => void;
 }) {
   return (
     <div className="app-shell flex h-screen bg-white text-slate-800">
@@ -323,10 +329,10 @@ function SystemShell({
         </header>
 
         <div className={`h-[calc(100%-73px)] overflow-auto p-4 md:p-6 ${page === "dashboard" ? "dashboard-scroll" : ""}`}>
-          {page === "dashboard" && <DashboardPage state={state} onNavigate={navigate} onLowStock={showLowStock} />}
+          {page === "dashboard" && <DashboardPage state={state} onNavigate={navigate} onLowStock={showLowStock} onExpiringSoon={showExpiringSoon} />}
           {appError && <div role="alert" className="mb-4 flex items-center justify-between rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><span>{appError}</span><button onClick={() => void refreshData().then(() => setAppError("")).catch((error) => setAppError(errorMessage(error)))} className="font-semibold underline">Retry</button></div>}
           {page === "pos" && <PosPage state={state} onRefresh={refreshData} />}
-          {page === "inventory" && <InventoryPage state={state} onRefresh={refreshData} lowStockOnly={inventoryFilter === "low-stock"} onClearLowStock={() => setInventoryFilter("all")} />}
+          {page === "inventory" && <InventoryPage state={state} onRefresh={refreshData} lowStockOnly={inventoryFilter === "low-stock"} expiringSoonOnly={inventoryFilter === "expiring-soon"} onShowLowStock={showLowStock} onShowExpiringSoon={showExpiringSoon} onClearFilters={() => setInventoryFilter("all")} />}
           {page === "suppliers" && <SuppliersPage state={state} onRefresh={refreshData} />}
           {page === "users" && currentUser.role === "ADMIN" && <UsersPage state={state} onRefresh={refreshData} currentUser={currentUser} />}
           {page === "audit" && currentUser.role === "ADMIN" && <AuditPage />}
@@ -338,7 +344,7 @@ function SystemShell({
   );
 }
 
-function DashboardPage({ state, onNavigate, onLowStock }: { state: PharmacyState; onNavigate: (page: Page) => void; onLowStock: () => void }) {
+function DashboardPage({ state, onNavigate, onLowStock, onExpiringSoon }: { state: PharmacyState; onNavigate: (page: Page) => void; onLowStock: () => void; onExpiringSoon: () => void }) {
   const todaySales = state.sales.filter((sale) => dateKey(sale.transactionDate) === today());
   const totalRevenue = todaySales.reduce((sum, sale) => sum + sale.totalAmount, 0);
   const lowStock = state.medicines.filter((item) => item.quantity <= item.reorderLevel);
@@ -369,7 +375,7 @@ function DashboardPage({ state, onNavigate, onLowStock }: { state: PharmacyState
         <StatCard title="Today's Revenue" value={fmt(totalRevenue)} sub={`${todaySales.length} transactions`} onClick={() => onNavigate("reports")} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm3.25 10.07H12.75v3.18h-1.5v-3.18H8.75v-1.5h2.5V7.93h1.5v3.14h2.5v1.5Z" /></svg>} accent="bg-emerald-50 text-emerald-600" />
         <StatCard title="Medicines" value={String(state.medicines.length)} sub={`${state.medicines.filter((m) => m.quantity > 0).length} active`} onClick={() => onNavigate("inventory")} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-9Zm3 2.5h10v2H7V10Zm0 4h7v2H7v-2Z" /></svg>} accent="bg-sky-50 text-sky-600" />
             <StatCard title="Low Stock" value={String(lowStock.length)} sub="Need reorder" onClick={onLowStock} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm0 15a1.25 1.25 0 1 1-1.25-1.25A1.25 1.25 0 0 1 12 17.5Zm1.75-5.75h-3.5V7.5h3.5v4.25Z" /></svg>} accent="bg-amber-50 text-amber-600" />
-        <StatCard title="Expiring Soon" value={String(expiringSoon.length)} sub="Under 90 days" onClick={() => onNavigate("inventory")} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M5.5 15.5A6.5 6.5 0 1 1 18.5 15.5a6.5 6.5 0 0 1-13 0Zm7-8.25v6h2v1.5h-3.5v-7.5h1.5Z" /></svg>} accent="bg-rose-50 text-rose-600" />
+        <StatCard title="Expiring Soon" value={String(expiringSoon.length)} sub="Under 90 days" onClick={onExpiringSoon} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M5.5 15.5A6.5 6.5 0 1 1 18.5 15.5a6.5 6.5 0 0 1-13 0Zm7-8.25v6h2v1.5h-3.5v-7.5h1.5Z" /></svg>} accent="bg-rose-50 text-rose-600" />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
@@ -442,6 +448,8 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   const [cart, setCart] = useState<CartItem[]>([]);
   const [paymentMethod, setPaymentMethod] = useState("Cash");
   const [discount, setDiscount] = useState("0");
+  const [discountType, setDiscountType] = useState<"none" | "pwd" | "senior">("none");
+  const [discountId, setDiscountId] = useState("");
   const [amountReceived, setAmountReceived] = useState("0");
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const [receiptFormat, setReceiptFormat] = useState<"thermal" | "standard">("thermal");
@@ -520,7 +528,9 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
 
   const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
   const requestedDiscount = Number(discount || 0);
-  const discountValue = Math.min(subtotal, Math.max(0, Number.isFinite(requestedDiscount) ? requestedDiscount : 0));
+  const manualDiscountValue = Math.max(0, Number.isFinite(requestedDiscount) ? requestedDiscount : 0);
+  const qualifiedDiscount = discountType !== "none" && discountId.trim() ? subtotal * 0.2 : 0;
+  const discountValue = Math.min(subtotal, discountType !== "none" ? qualifiedDiscount : manualDiscountValue);
   const taxValue = Number((subtotal * 0.1).toFixed(2));
   const total = Number(Math.max(0, subtotal - discountValue + taxValue).toFixed(2));
   const change = Number((Number(amountReceived || 0) - total).toFixed(2));
@@ -560,6 +570,8 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     setPendingPayment(null);
     setCart([]);
     setDiscount("0");
+    setDiscountType("none");
+    setDiscountId("");
     setAmountReceived("0");
     setPaymentMethod("Cash");
     setIdempotencyKey(crypto.randomUUID());
@@ -591,6 +603,10 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   const submitSale = async () => {
     if (!cart.length || pendingPayment) return;
     setSaleError("");
+    if (discountType !== "none" && !discountId.trim()) {
+      setSaleError(`${discountType === "pwd" ? "PWD" : "Senior citizen"} ID number is required for the 20% discount.`);
+      return;
+    }
     if (Number(amountReceived || 0) < total && paymentMethod === "Cash") {
       setSaleError("Cash amount must cover the total.");
       return;
@@ -600,6 +616,8 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
       const result = await api.createSale({
         items: cart.map((item) => ({ medicineId: item.id, quantity: item.quantity })),
         discount: discountValue,
+        discountType,
+        discountId: discountId.trim(),
         paymentMethod,
         amountReceived: Number(amountReceived || total),
         idempotencyKey,
@@ -730,10 +748,11 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Discount</label>
-              <input type="number" min="0" max={subtotal} value={discount} onChange={(e) => setDiscount(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
+              <label htmlFor="discount-type" className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Discount</label>
+              <select id="discount-type" value={discountType} onChange={(event) => { setDiscountType(event.target.value as "none" | "pwd" | "senior"); setDiscountId(""); }} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"><option value="none">None</option><option value="pwd">PWD - 20%</option><option value="senior">Senior citizen - 20%</option></select>
             </div>
           </div>
+          {discountType !== "none" ? <div><label htmlFor="discount-id" className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">{discountType === "pwd" ? "PWD ID number" : "Senior citizen ID number"}</label><input id="discount-id" value={discountId} onChange={(event) => setDiscountId(event.target.value)} placeholder="Enter ID number" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" /><div className="mt-1 text-[10px] text-slate-500">A 20% discount will apply automatically after the ID is entered.</div></div> : <div><label htmlFor="manual-discount" className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Other discount</label><input id="manual-discount" type="number" min="0" max={subtotal} value={discount} onChange={(e) => setDiscount(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" /></div>}
           {paymentMethod === 'Cash' && (
             <div>
               <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Tendered</label>
@@ -759,7 +778,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   );
 }
 
-function InventoryPage({ state, onRefresh, lowStockOnly, onClearLowStock }: { state: PharmacyState; onRefresh: () => Promise<PharmacyState>; lowStockOnly: boolean; onClearLowStock: () => void }) {
+function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onShowLowStock, onShowExpiringSoon, onClearFilters }: { state: PharmacyState; onRefresh: () => Promise<PharmacyState>; lowStockOnly: boolean; expiringSoonOnly: boolean; onShowLowStock: () => void; onShowExpiringSoon: () => void; onClearFilters: () => void }) {
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<{ mode: "Add" | "Edit"; item?: Medicine } | null>(null);
   const [draft, setDraft] = useState<Partial<Medicine>>({});
@@ -773,7 +792,10 @@ function InventoryPage({ state, onRefresh, lowStockOnly, onClearLowStock }: { st
   const filtered = state.medicines.filter((medicine) => {
     const q = search.toLowerCase();
     const matchesSearch = [medicine.brandName, medicine.genericName, medicine.barcode, medicine.batchNumber].some((field) => field.toLowerCase().includes(q));
-    return matchesSearch && (!lowStockOnly || medicine.quantity <= medicine.reorderLevel);
+    const matchesLowStock = !lowStockOnly || medicine.quantity <= medicine.reorderLevel;
+    const daysToExpiry = (new Date(medicine.expirationDate).getTime() - new Date(today()).getTime()) / 86400000;
+    const matchesExpiringSoon = !expiringSoonOnly || (daysToExpiry > 0 && daysToExpiry <= 90);
+    return matchesSearch && matchesLowStock && matchesExpiringSoon;
   });
 
   const openAdd = () => {
@@ -864,19 +886,30 @@ function InventoryPage({ state, onRefresh, lowStockOnly, onClearLowStock }: { st
   };
 
   const receivePurchase = async (purchaseId: string) => {
+    setConfirmDialog({ title: "Receive purchase order?", message: "Are you sure you want to receive this purchase and add its stock?", confirmLabel: "Receive purchase", onConfirm: () => void performReceivePurchase(purchaseId) });
+  };
+
+  const performReceivePurchase = async (purchaseId: string) => {
     setOperationError("");
     try { await api.receivePurchase(purchaseId); await onRefresh(); }
     catch (error) { setOperationError(errorMessage(error)); }
   };
 
   const cancelPurchase = async (purchaseId: string) => {
-    if (!window.confirm("Cancel this pending purchase order?")) return;
+    setConfirmDialog({ title: "Cancel purchase order?", message: "Are you sure you want to cancel this pending purchase order?", confirmLabel: "Cancel purchase", onConfirm: () => void performCancelPurchase(purchaseId) });
+  };
+
+  const performCancelPurchase = async (purchaseId: string) => {
     setOperationError("");
     try { await api.cancelPurchase(purchaseId); await onRefresh(); }
     catch (error) { setOperationError(errorMessage(error)); }
   };
 
   const recordMovement = async () => {
+    setConfirmDialog({ title: "Record stock update?", message: "Are you sure you want to apply this stock movement?", confirmLabel: "Record update", onConfirm: () => void performRecordMovement() });
+  };
+
+  const performRecordMovement = async () => {
     setOperationError("");
     try {
       await api.recordInventoryMovement({ ...movementDraft, quantity: Number(movementDraft.quantity) });
@@ -915,7 +948,8 @@ function InventoryPage({ state, onRefresh, lowStockOnly, onClearLowStock }: { st
           <div className="text-sm text-slate-500">{state.medicines.length} medicine records tracked</div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={onClearLowStock} className={`rounded-xl border px-4 py-2.5 text-sm font-bold ${lowStockOnly ? "border-amber-300 bg-amber-50 text-amber-800" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}>{lowStockOnly ? "Show all medicines" : "Show low stock"}</button>
+          <button onClick={lowStockOnly ? onClearFilters : onShowLowStock} className={`rounded-xl border px-4 py-2.5 text-sm font-bold ${lowStockOnly ? "border-amber-300 bg-amber-50 text-amber-800" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}>{lowStockOnly ? "Show all medicines" : "Show low stock"}</button>
+          <button onClick={expiringSoonOnly ? onClearFilters : onShowExpiringSoon} className={`rounded-xl border px-4 py-2.5 text-sm font-bold ${expiringSoonOnly ? "border-rose-300 bg-rose-50 text-rose-800" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}>{expiringSoonOnly ? "Show all medicines" : "Show expiring soon"}</button>
           <button onClick={openAdd} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-bold text-white shadow hover:bg-teal-500">Add medicine</button>
         </div>
       </div>
@@ -1062,9 +1096,17 @@ function InventoryPage({ state, onRefresh, lowStockOnly, onClearLowStock }: { st
   );
 }
 
+type ConfirmDialogData = { title: string; message: string; confirmLabel: string; onConfirm: () => void };
+
+function ConfirmDialog({ dialog, onClose }: { dialog: ConfirmDialogData | null; onClose: () => void }) {
+  if (!dialog) return null;
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"><div role="dialog" aria-modal="true" className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl"><h2 className="text-lg font-bold text-slate-900">{dialog.title}</h2><p className="mt-2 text-sm text-slate-600">{dialog.message}</p><div className="mt-6 flex justify-end gap-3"><button onClick={onClose} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button><button onClick={() => { onClose(); dialog.onConfirm(); }} className="rounded-xl bg-teal-700 px-4 py-2.5 text-sm font-bold text-white">{dialog.confirmLabel}</button></div></div></div>;
+}
+
 function SuppliersPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => Promise<PharmacyState> }) {
   const [draft, setDraft] = useState<Partial<Supplier>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogData | null>(null);
 
   const save = async () => {
     if (!draft.supplierName || !draft.phone) {
@@ -1072,6 +1114,10 @@ function SuppliersPage({ state, onRefresh }: { state: PharmacyState; onRefresh: 
       return;
     }
 
+    setConfirmDialog({ title: editingId ? "Save supplier update?" : "Save supplier?", message: `Are you sure you want to ${editingId ? "save these changes to" : "create"} ${draft.supplierName}?`, confirmLabel: editingId ? "Save update" : "Save supplier", onConfirm: () => void performSave() });
+  };
+
+  const performSave = async () => {
     try {
       await api.saveSupplier(editingId ?? undefined, draft);
       await onRefresh();
@@ -1081,7 +1127,12 @@ function SuppliersPage({ state, onRefresh }: { state: PharmacyState; onRefresh: 
   };
 
   const remove = async (id: string) => {
-    if (!window.confirm("Deactivate this supplier?")) return;
+    const supplier = state.suppliers.find((item) => item.id === id);
+    if (!supplier) return;
+    setConfirmDialog({ title: "Delete supplier?", message: `Are you sure you want to deactivate ${supplier.supplierName}?`, confirmLabel: "Delete supplier", onConfirm: () => void performRemove(id) });
+  };
+
+  const performRemove = async (id: string) => {
     try { await api.archiveSupplier(id); await onRefresh(); }
     catch (error) { window.alert(errorMessage(error)); }
   };
@@ -1122,6 +1173,7 @@ function SuppliersPage({ state, onRefresh }: { state: PharmacyState; onRefresh: 
           ))}
         </div>
       </div>
+      <ConfirmDialog dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />
     </div>
   );
 }
@@ -1131,6 +1183,7 @@ function UsersPage({ state, onRefresh, currentUser }: { state: PharmacyState; on
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [resetUserId, setResetUserId] = useState<string | null>(null);
   const [resetPassword, setResetPassword] = useState("");
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogData | null>(null);
 
   const save = async () => {
     if (!draft.fullName || !draft.email || (!editingUserId && !draft.username)) {
@@ -1141,8 +1194,12 @@ function UsersPage({ state, onRefresh, currentUser }: { state: PharmacyState; on
       window.alert("Use a password with at least 10 characters.");
       return;
     }
+    setConfirmDialog({ title: editingUserId ? "Save user update?" : "Create user?", message: `Are you sure you want to ${editingUserId ? "save these changes to" : "create"} ${draft.fullName}?`, confirmLabel: editingUserId ? "Save update" : "Create user", onConfirm: () => void performSave() });
+  };
+
+  const performSave = async () => {
     try {
-      if (editingUserId) await api.updateUser(editingUserId, { fullName: draft.fullName, email: draft.email, role: draft.role ?? "CASHIER" });
+      if (editingUserId) await api.updateUser(editingUserId, { fullName: draft.fullName!, email: draft.email!, role: draft.role ?? "CASHIER" });
       else await api.createUser({ username: String(draft.username), fullName: String(draft.fullName), email: String(draft.email), password: String(draft.password), role: draft.role ?? "CASHIER" });
       await onRefresh();
       setDraft({ password: "" });
@@ -1151,13 +1208,24 @@ function UsersPage({ state, onRefresh, currentUser }: { state: PharmacyState; on
   };
 
   const deactivate = async (user: PharmacyUser) => {
-    if (user.id === currentUser.id || !window.confirm(`Deactivate ${user.fullName}? Their active sessions will be closed.`)) return;
+    if (user.id === currentUser.id) return;
+    setConfirmDialog({ title: "Delete user?", message: `Are you sure you want to deactivate ${user.fullName}? Their active sessions will be closed.`, confirmLabel: "Delete user", onConfirm: () => void performDeactivate(user) });
+  };
+
+  const performDeactivate = async (user: PharmacyUser) => {
     try { await api.deactivateUser(user.id); await onRefresh(); }
     catch (error) { window.alert(errorMessage(error)); }
   };
 
   const submitPasswordReset = async () => {
     if (!resetUserId || resetPassword.length < 10) { window.alert("Use a password with at least 10 characters."); return; }
+    const user = state.users.find((item) => item.id === resetUserId);
+    if (!user) return;
+    setConfirmDialog({ title: "Reset password?", message: `Are you sure you want to reset the password for ${user.fullName}?`, confirmLabel: "Reset password", onConfirm: () => void performPasswordReset() });
+  };
+
+  const performPasswordReset = async () => {
+    if (!resetUserId) return;
     try { await api.resetUserPassword(resetUserId, resetPassword); await onRefresh(); setResetPassword(""); setResetUserId(null); }
     catch (error) { window.alert(errorMessage(error)); }
   };
@@ -1201,11 +1269,12 @@ function UsersPage({ state, onRefresh, currentUser }: { state: PharmacyState; on
                 </>}
                 <div className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-slate-700">{user.status}</div>
               </div>
-              {resetUserId === user.id && <div className="mt-3 flex gap-2"><input type="password" autoComplete="new-password" value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} aria-label={`New password for ${user.fullName}`} placeholder="New password (10+ characters)" className="min-w-0 rounded-lg border border-slate-200 px-3 py-2 text-xs" /><button onClick={() => void submitPasswordReset()} className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white">Save password</button></div>}
+              {resetUserId === user.id && <div className="mt-3 flex flex-wrap gap-2"><input type="password" autoComplete="new-password" value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} aria-label={`New password for ${user.fullName}`} placeholder="New password (10+ characters)" className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-xs" /><button onClick={() => void submitPasswordReset()} className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white">Save password</button><button onClick={() => { setResetUserId(null); setResetPassword(""); }} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700">Cancel</button></div>}
             </div>
           ))}
         </div>
       </div>
+      <ConfirmDialog dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />
     </div>
   );
 }
@@ -1301,6 +1370,7 @@ function BackupsPage() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogData | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -1318,7 +1388,10 @@ function BackupsPage() {
   };
 
   const restoreMedicine = async (medicine: Medicine) => {
-    if (!window.confirm(`Restore ${medicine.brandName} to active inventory?`)) return;
+    setConfirmDialog({ title: "Restore medicine?", message: `Are you sure you want to restore ${medicine.brandName} to active inventory?`, confirmLabel: "Restore medicine", onConfirm: () => void performRestoreMedicine(medicine) });
+  };
+
+  const performRestoreMedicine = async (medicine: Medicine) => {
     setError("");
     try { await api.restoreMedicine(medicine.id); setReloadKey((key) => key + 1); }
     catch (reason) { setError(errorMessage(reason)); }
@@ -1341,6 +1414,7 @@ function BackupsPage() {
         <div className="mb-3"><h3 className="text-sm font-bold text-slate-900">All record changes</h3><p className="mt-1 text-xs text-slate-500">Created, edited, deleted, restored, and account changes.</p></div>
         {changes.length === 0 ? <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No record changes yet.</div> : <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="min-w-full text-left text-xs"><thead className="bg-slate-50 text-slate-600"><tr><th className="px-3 py-2">Action</th><th className="px-3 py-2">Record</th><th className="px-3 py-2">By</th><th className="px-3 py-2">When</th><th className="px-3 py-2">Details</th></tr></thead><tbody className="divide-y divide-slate-100">{changes.map((change) => <tr key={change.id}><td className="px-3 py-2 font-semibold text-slate-800">{change.action}</td><td className="px-3 py-2 text-slate-600">{change.entityName ?? change.entityId}<div className="text-[10px] text-slate-400">{change.entityType}</div></td><td className="px-3 py-2 text-slate-600">{change.actorName ?? change.actorUsername ?? "System"}</td><td className="px-3 py-2 text-slate-500">{new Date(change.timestamp).toLocaleString()}</td><td className="max-w-xs px-3 py-2"><details><summary className="cursor-pointer font-semibold text-teal-700">View</summary><pre className="mt-1 whitespace-pre-wrap break-words text-[10px] text-slate-500">{JSON.stringify(change.metadata, null, 2)}</pre></details></td></tr>)}</tbody></table></div>}
       </section>
+      <ConfirmDialog dialog={confirmDialog} onClose={() => setConfirmDialog(null)} />
     </section>
   );
 }
