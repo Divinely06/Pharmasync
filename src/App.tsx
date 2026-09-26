@@ -147,7 +147,7 @@ function App() {
             <img
               src="/logo.png"
               alt="Pharmasync logo"
-              className="h-40 w-40 rounded-[22px] object-cover shadow-[0_18px_40px_rgba(15,23,42,0.16)] sm:h-48 sm:w-48"
+              className="h-40 w-40 object-contain drop-shadow-[0_18px_40px_rgba(15,23,42,0.16)] sm:h-48 sm:w-48"
             />
           </div>
 
