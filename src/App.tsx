@@ -204,7 +204,10 @@ function App() {
 
   const currentUser = authUser;
   const visibleNav = navMeta.filter((item) => canAccess(currentUser.role, item.area));
-  return <SystemShell {...{ state, page, setPage, mobileOpen, setMobileOpen, currentUser, logout, lowStockCount, todayRevenue, visibleNav, refreshData, appError, setAppError }} />;
+  const navigate = (nextPage: Page) => {
+    if (visibleNav.some((item) => item.id === nextPage)) setPage(nextPage);
+  };
+  return <SystemShell {...{ state, page, setPage, mobileOpen, setMobileOpen, currentUser, logout, lowStockCount, todayRevenue, visibleNav, refreshData, appError, setAppError, navigate }} />;
 }
 
 function SystemShell({
@@ -221,6 +224,7 @@ function SystemShell({
   refreshData,
   appError,
   setAppError,
+  navigate,
 }: {
   state: PharmacyState;
   page: Page;
@@ -235,6 +239,7 @@ function SystemShell({
   refreshData: () => Promise<PharmacyState>;
   appError: string;
   setAppError: React.Dispatch<React.SetStateAction<string>>;
+  navigate: (page: Page) => void;
 }) {
   return (
     <div className="app-shell flex h-screen bg-white text-slate-800">
@@ -306,8 +311,8 @@ function SystemShell({
           <div className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">System Online</div>
         </header>
 
-        <div className="h-[calc(100%-73px)] overflow-auto p-4 md:p-6">
-          {page === "dashboard" && <DashboardPage state={state} />}
+        <div className={`h-[calc(100%-73px)] overflow-auto p-4 md:p-6 ${page === "dashboard" ? "dashboard-scroll" : ""}`}>
+          {page === "dashboard" && <DashboardPage state={state} onNavigate={navigate} />}
           {appError && <div role="alert" className="mb-4 flex items-center justify-between rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><span>{appError}</span><button onClick={() => void refreshData().then(() => setAppError("")).catch((error) => setAppError(errorMessage(error)))} className="font-semibold underline">Retry</button></div>}
           {page === "pos" && <PosPage state={state} onRefresh={refreshData} />}
           {page === "inventory" && <InventoryPage state={state} onRefresh={refreshData} />}
@@ -322,7 +327,7 @@ function SystemShell({
   );
 }
 
-function DashboardPage({ state }: { state: PharmacyState }) {
+function DashboardPage({ state, onNavigate }: { state: PharmacyState; onNavigate: (page: Page) => void }) {
   const todaySales = state.sales.filter((sale) => dateKey(sale.transactionDate) === today());
   const totalRevenue = todaySales.reduce((sum, sale) => sum + sale.totalAmount, 0);
   const lowStock = state.medicines.filter((item) => item.quantity <= item.reorderLevel);
@@ -350,10 +355,10 @@ function DashboardPage({ state }: { state: PharmacyState }) {
   return (
     <div className="space-y-6">
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Today's Revenue" value={fmt(totalRevenue)} sub={`${todaySales.length} transactions`} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm3.25 10.07H12.75v3.18h-1.5v-3.18H8.75v-1.5h2.5V7.93h1.5v3.14h2.5v1.5Z" /></svg>} accent="bg-emerald-50 text-emerald-600" />
-        <StatCard title="Medicines" value={String(state.medicines.length)} sub={`${state.medicines.filter((m) => m.quantity > 0).length} active`} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-9Zm3 2.5h10v2H7V10Zm0 4h7v2H7v-2Z" /></svg>} accent="bg-sky-50 text-sky-600" />
-        <StatCard title="Low Stock" value={String(lowStock.length)} sub="Need reorder" icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm0 15a1.25 1.25 0 1 1 1.25-1.25A1.25 1.25 0 0 1 12 17.5Zm1.75-5.75h-3.5V7.5h3.5v4.25Z" /></svg>} accent="bg-amber-50 text-amber-600" />
-        <StatCard title="Expiring Soon" value={String(expiringSoon.length)} sub="Under 90 days" icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M5.5 15.5A6.5 6.5 0 1 1 18.5 15.5a6.5 6.5 0 0 1-13 0Zm7-8.25v6h2v1.5h-3.5v-7.5h1.5Z" /></svg>} accent="bg-rose-50 text-rose-600" />
+        <StatCard title="Today's Revenue" value={fmt(totalRevenue)} sub={`${todaySales.length} transactions`} onClick={() => onNavigate("reports")} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm3.25 10.07H12.75v3.18h-1.5v-3.18H8.75v-1.5h2.5V7.93h1.5v3.14h2.5v1.5Z" /></svg>} accent="bg-emerald-50 text-emerald-600" />
+        <StatCard title="Medicines" value={String(state.medicines.length)} sub={`${state.medicines.filter((m) => m.quantity > 0).length} active`} onClick={() => onNavigate("inventory")} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-9Zm3 2.5h10v2H7V10Zm0 4h7v2H7v-2Z" /></svg>} accent="bg-sky-50 text-sky-600" />
+        <StatCard title="Low Stock" value={String(lowStock.length)} sub="Need reorder" onClick={() => onNavigate("inventory")} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm0 15a1.25 1.25 0 1 1-1.25-1.25A1.25 1.25 0 0 1 12 17.5Zm1.75-5.75h-3.5V7.5h3.5v4.25Z" /></svg>} accent="bg-amber-50 text-amber-600" />
+        <StatCard title="Expiring Soon" value={String(expiringSoon.length)} sub="Under 90 days" onClick={() => onNavigate("inventory")} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M5.5 15.5A6.5 6.5 0 1 1 18.5 15.5a6.5 6.5 0 0 1-13 0Zm7-8.25v6h2v1.5h-3.5v-7.5h1.5Z" /></svg>} accent="bg-rose-50 text-rose-600" />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
@@ -1406,9 +1411,9 @@ function Field({ label, value, onChange, type = "text" }: { label: string; value
   );
 }
 
-function StatCard({ title, value, sub, icon, accent }: { title: string; value: string; sub: string; icon: React.ReactNode; accent: string }) {
+function StatCard({ title, value, sub, icon, accent, onClick }: { title: string; value: string; sub: string; icon: React.ReactNode; accent: string; onClick?: () => void }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <button type="button" onClick={onClick} className="w-full rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-md focus-visible:border-teal-500">
       <div className="flex items-start gap-4">
         <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${accent}`}>{icon}</div>
         <div>
@@ -1417,7 +1422,7 @@ function StatCard({ title, value, sub, icon, accent }: { title: string; value: s
           <div className="mt-1 text-xs text-slate-500">{sub}</div>
         </div>
       </div>
-    </div>
+    </button>
   );
 }
 

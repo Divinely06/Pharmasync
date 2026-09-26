@@ -171,6 +171,10 @@ select:focus-visible {
   scrollbar-color: #e2e8f0 transparent;
 }
 
+.dashboard-scroll:hover {
+  scrollbar-width: none;
+}
+
 @media print {
   @page {
     margin: 6mm;
