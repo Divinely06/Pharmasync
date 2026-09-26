@@ -5,11 +5,48 @@ const optionalText = (max = 1000) => z.string().max(max).optional().default("");
 const nonNegativeMoney = z.coerce.number().finite().nonnegative();
 const nonNegativeInteger = z.coerce.number().int().nonnegative();
 
+const normalizeOrigin = (value: string | undefined) => value ? value.replace(/\/$/, "") : value;
+const isPreviewHost = (hostname: string) => hostname === "localhost" || hostname === "127.0.0.1" || hostname.endsWith(".app.github.dev") || hostname.endsWith(".preview.app.github.dev");
+
 export const isRequestOriginAllowed = (method: string, origin: string | undefined, allowedOrigin: string | undefined, production: boolean) => {
+  const normalizedOrigin = normalizeOrigin(origin);
+  const normalizedAllowed = normalizeOrigin(allowedOrigin);
+
   if (!production) return true;
-  if (origin && origin !== allowedOrigin) return false;
+
+  if (!normalizedOrigin) {
+    if (["GET", "HEAD", "OPTIONS"].includes(method)) return true;
+    return false;
+  }
+
+  if (normalizedAllowed) {
+    const configuredOrigins = normalizedAllowed.split(",").map((entry) => normalizeOrigin(entry.trim())).filter(Boolean);
+    if (configuredOrigins.includes(normalizedOrigin)) return true;
+
+    try {
+      const originUrl = new URL(normalizedOrigin);
+      const isEquivalentLocalhost = configuredOrigins.some((configured) => {
+        try {
+          const configuredUrl = new URL(configured);
+          return configuredUrl.hostname === originUrl.hostname && configuredUrl.port === originUrl.port;
+        } catch {
+          return false;
+        }
+      });
+      if (isEquivalentLocalhost) return true;
+    } catch {
+      // ignore invalid origins; falls through to preview-host allowance below
+    }
+  }
+
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return true;
-  return Boolean(allowedOrigin && origin === allowedOrigin);
+
+  try {
+    const originUrl = new URL(normalizedOrigin);
+    return isPreviewHost(originUrl.hostname);
+  } catch {
+    return false;
+  }
 };
 
 export const loginSchema = z.object({

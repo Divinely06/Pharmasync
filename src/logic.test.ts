@@ -100,4 +100,10 @@ describe('production request origin policy', () => {
     expect(isRequestOriginAllowed('POST', undefined, allowedOrigin, true)).toBe(false);
     expect(isRequestOriginAllowed('POST', 'https://attacker.example', allowedOrigin, true)).toBe(false);
   });
+
+  it('allows local preview hosts used by dev environments and Codespaces', () => {
+    expect(isRequestOriginAllowed('POST', 'http://localhost:4175', 'http://localhost:4175', true)).toBe(true);
+    expect(isRequestOriginAllowed('POST', 'http://127.0.0.1:4175', 'http://localhost:4175', true)).toBe(true);
+    expect(isRequestOriginAllowed('POST', 'https://verbose-funicular-4qv6r576x76xf5r5q-4175.app.github.dev', 'http://localhost:4175', true)).toBe(true);
+  });
 });
