@@ -69,6 +69,14 @@ const hydrateState = (source: PharmacyState): PharmacyState => ({
 const errorMessage = (error: unknown) => error instanceof ApiError ? `${error.message} (${error.status}${error.code ? ` · ${error.code}` : ""})` : error instanceof Error ? error.message : "The request could not be completed.";
 const dateKey = (value: string | Date) => new Date(value).toLocaleDateString("en-CA");
 const today = () => dateKey(new Date());
+const chartCurrency = (value: number) => {
+  if (value === 0) return "₱0";
+  if (Math.abs(value) >= 1000) {
+    const thousands = value / 1000;
+    return `₱${Number(thousands.toFixed(thousands < 10 ? 1 : 0))}k`;
+  }
+  return fmt(value);
+};
 
 function App() {
   const [state, setState] = useState<PharmacyState>(emptyState);
@@ -391,7 +399,7 @@ function DashboardPage({ state, onNavigate, onLowStock, onExpiringSoon }: { stat
             <BarChart data={weeklySales}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
               <XAxis dataKey="day" tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(value) => `₱${value / 1000}k`} />
+              <YAxis domain={[0, "auto"]} tickCount={5} tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(value) => chartCurrency(Number(value ?? 0))} />
               <Tooltip formatter={(value) => fmt(Number(value ?? 0))} />
               <Bar dataKey="revenue" radius={[8, 8, 0, 0]} fill="#0d9488" />
             </BarChart>
