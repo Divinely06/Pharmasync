@@ -1021,7 +1021,7 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
       </div>
       {operationError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{operationError}</div>}
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      {!lowStockOnly && !expiringSoonOnly && <div className="grid gap-4 xl:grid-cols-2">
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <h2 className="mb-4 text-sm font-bold text-slate-900">Purchase receiving</h2>
           <div className="grid gap-3 md:grid-cols-2">
@@ -1054,7 +1054,7 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
           {operationError && <div role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{operationError}</div>}
           <div className="mt-5 border-t border-slate-100 pt-3"><div className="mb-2 text-xs font-bold text-slate-700">Recent movements</div>{state.inventoryTransactions.slice(0, 6).map((movement) => <div key={movement.id} className="flex justify-between gap-2 border-b border-slate-50 py-2 text-[10px] text-slate-600"><span>{movement.transactionType} · {state.medicines.find((medicine) => medicine.id === movement.medicineId)?.brandName ?? movement.medicineId}</span><span>{movement.quantity > 0 ? "+" : ""}{movement.quantity} · {new Date(movement.timestamp).toLocaleDateString()}</span></div>)}</div>
         </section>
-      </div>
+      </div>}
 
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
