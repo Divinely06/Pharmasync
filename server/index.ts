@@ -7,7 +7,7 @@ import { Pool, type PoolClient } from "pg";
 import bcrypt from "bcryptjs";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
-import { auditFilterSchema, inventoryMovementSchema, listFilterSchema, loginSchema, medicineSchema, medicineUpdateSchema, passwordResetSchema, purchaseSchema, reportFilterSchema, saleSchema, supplierSchema, userCreateSchema, userUpdateSchema } from "./validation";
+import { auditFilterSchema, inventoryMovementSchema, isRequestOriginAllowed, listFilterSchema, loginSchema, medicineSchema, medicineUpdateSchema, passwordResetSchema, purchaseSchema, reportFilterSchema, saleSchema, supplierSchema, userCreateSchema, userUpdateSchema } from "./validation";
 import { allocateFefo } from "./inventory";
 import { createLogicalBackup, dumpDatabase } from "./backup";
 import { createPaymentProvider, type PaymentStatus } from "./payment-provider";
@@ -34,7 +34,7 @@ app.use(express.json({ limit: "64kb" }));
 app.use((req, res, next) => {
   const origin = req.header("Origin");
   const allowedOrigin = process.env.CLIENT_ORIGIN;
-  if (production && origin !== allowedOrigin) return res.status(403).json({ code: "ORIGIN_REJECTED", error: "Request origin is not allowed" });
+  if (!isRequestOriginAllowed(req.method, origin, allowedOrigin, production)) return res.status(403).json({ code: "ORIGIN_REJECTED", error: "Request origin is not allowed" });
   if (origin && allowedOrigin && origin === allowedOrigin) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
@@ -49,7 +49,6 @@ app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   }
   if (req.method === "OPTIONS") return res.sendStatus(204);
-  if (production && ["POST", "PATCH", "DELETE"].includes(req.method) && origin !== allowedOrigin) return res.status(403).json({ code: "ORIGIN_REJECTED", error: "Request origin is not allowed" });
   next();
 });
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canAccess, buildAuditLog, calculateTotals } from './data';
 import { api } from './api';
-import { medicineSchema, saleSchema } from '../server/validation';
+import { isRequestOriginAllowed, medicineSchema, saleSchema } from '../server/validation';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -73,6 +73,10 @@ describe('write request validation', () => {
     expect(saleSchema.safeParse({ items: [{ medicineId: 'med-1', quantity: 1 }], paymentMethod: 'Cash' }).success).toBe(false);
   });
 
+  it('rejects duplicate medicines in one sale request', () => {
+    expect(saleSchema.safeParse({ items: [{ medicineId: 'med-1', quantity: 1 }, { medicineId: 'med-1', quantity: 1 }], paymentMethod: 'Cash', idempotencyKey: 'attempt-1' }).success).toBe(false);
+  });
+
   it('rejects invalid batch dates and negative inventory values', () => {
     const medicine = {
       barcode: '12345', genericName: 'Example', brandName: 'Example 10mg', medicineType: 'Other', dosageForm: 'Tablet', strength: '10mg',
@@ -80,5 +84,20 @@ describe('write request validation', () => {
     };
     expect(medicineSchema.safeParse(medicine).success).toBe(false);
     expect(medicineSchema.safeParse({ ...medicine, expirationDate: '2027-02-28', quantity: -1 }).success).toBe(false);
+  });
+});
+
+describe('production request origin policy', () => {
+  const allowedOrigin = 'https://pharmasync.example';
+
+  it('allows originless safe requests such as health checks and same-origin reads', () => {
+    expect(isRequestOriginAllowed('GET', undefined, allowedOrigin, true)).toBe(true);
+    expect(isRequestOriginAllowed('OPTIONS', undefined, allowedOrigin, true)).toBe(true);
+  });
+
+  it('requires the configured origin for writes and rejects foreign origins', () => {
+    expect(isRequestOriginAllowed('POST', allowedOrigin, allowedOrigin, true)).toBe(true);
+    expect(isRequestOriginAllowed('POST', undefined, allowedOrigin, true)).toBe(false);
+    expect(isRequestOriginAllowed('POST', 'https://attacker.example', allowedOrigin, true)).toBe(false);
   });
 });

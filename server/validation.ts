@@ -5,6 +5,13 @@ const optionalText = (max = 1000) => z.string().max(max).optional().default("");
 const nonNegativeMoney = z.coerce.number().finite().nonnegative();
 const nonNegativeInteger = z.coerce.number().int().nonnegative();
 
+export const isRequestOriginAllowed = (method: string, origin: string | undefined, allowedOrigin: string | undefined, production: boolean) => {
+  if (!production) return true;
+  if (origin && origin !== allowedOrigin) return false;
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) return true;
+  return Boolean(allowedOrigin && origin === allowedOrigin);
+};
+
 export const loginSchema = z.object({
   username: requiredText(100),
   password: z.string().min(1).max(256),
@@ -57,7 +64,7 @@ export const userUpdateSchema = z.object({
 export const passwordResetSchema = z.object({ password: z.string().min(10).max(256) });
 
 export const saleSchema = z.object({
-  items: z.array(z.object({ medicineId: requiredText(100), quantity: z.coerce.number().int().positive() })).min(1).max(100),
+  items: z.array(z.object({ medicineId: requiredText(100), quantity: z.coerce.number().int().positive() })).min(1).max(100).refine((items) => new Set(items.map((item) => item.medicineId)).size === items.length, "Each medicine may only appear once"),
   discount: nonNegativeMoney.default(0),
   paymentMethod: z.enum(["Cash", "GCash", "Maya", "Card"]),
   amountReceived: nonNegativeMoney.optional(),
