@@ -240,7 +240,7 @@ function SystemShell({
       <aside className={`fixed inset-y-0 left-0 z-40 w-64 border-r border-slate-200 bg-white shadow-sm transition-transform duration-200 md:relative md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
         <div className="flex items-center justify-between border-b border-slate-100 p-5">
           <div className="flex items-center gap-3">
-            <BrandMark className="h-10 w-10" />
+            <BrandMark className="h-16 w-16" />
           </div>
         </div>
 
