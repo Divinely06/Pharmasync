@@ -144,7 +144,11 @@ function App() {
         }}
       >
           <div className="absolute left-5 -top-5 sm:left-8 sm:-top-3">
-            <BrandMark large className="h-40 w-40 sm:h-48 sm:w-48" />
+            <img
+              src="/logo.png"
+              alt="Pharmasync logo"
+              className="h-40 w-40 rounded-[22px] object-cover shadow-[0_18px_40px_rgba(15,23,42,0.16)] sm:h-48 sm:w-48"
+            />
           </div>
 
           <div className="w-full max-w-md overflow-hidden rounded-[32px] border border-slate-200/80 bg-white/90 shadow-[0_25px_80px_rgba(15,23,42,0.12)] backdrop-blur-sm">
