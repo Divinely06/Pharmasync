@@ -2,7 +2,7 @@ import "dotenv/config";
 import { readFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { Pool } from "pg";
-import { logicalTables } from "./backup";
+import { logicalTables } from "./backup.js";
 
 type LogicalBackup = { format: string; schemaVersion: number; tables: Record<string, unknown[]> };
 const filePath = process.argv[2];

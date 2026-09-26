@@ -7,10 +7,10 @@ import { Pool, type PoolClient } from "pg";
 import bcrypt from "bcryptjs";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
-import { auditFilterSchema, inventoryMovementSchema, isRequestOriginAllowed, listFilterSchema, loginSchema, medicineSchema, medicineUpdateSchema, passwordResetSchema, purchaseSchema, reportFilterSchema, saleSchema, supplierSchema, userCreateSchema, userUpdateSchema } from "./validation";
-import { allocateFefo } from "./inventory";
-import { createLogicalBackup, dumpDatabase } from "./backup";
-import { createPaymentProvider, type PaymentStatus } from "./payment-provider";
+import { auditFilterSchema, inventoryMovementSchema, isRequestOriginAllowed, listFilterSchema, loginSchema, medicineSchema, medicineUpdateSchema, passwordResetSchema, purchaseSchema, reportFilterSchema, saleSchema, supplierSchema, userCreateSchema, userUpdateSchema } from "./validation.js";
+import { allocateFefo } from "./inventory.js";
+import { createLogicalBackup, dumpDatabase } from "./backup.js";
+import { createPaymentProvider, type PaymentStatus } from "./payment-provider.js";
 
 const connectionString = process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI;
 if (!connectionString) throw new Error("DATABASE_URL is required");

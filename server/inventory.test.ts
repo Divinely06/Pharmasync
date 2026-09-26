@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allocateFefo } from "./inventory";
+import { allocateFefo } from "./inventory.js";
 
 describe("FEFO stock allocation", () => {
   it("consumes the earliest-expiry batch before later batches", () => {

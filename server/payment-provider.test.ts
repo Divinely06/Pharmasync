@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createPaymentProvider, DummyPaymentProvider } from "./payment-provider";
+import { createPaymentProvider, DummyPaymentProvider } from "./payment-provider.js";
 
 const request = { saleId: "sale-1", amount: 100, currency: "PHP", method: "E_WALLET" as const, idempotencyKey: "checkout-1" };
 
