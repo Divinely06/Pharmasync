@@ -213,6 +213,23 @@ app.get("/api/medicines", auth, async (req, res) => {
   res.json({ medicines: result.rows, page, pageSize, total: count.rows[0].total, totalPages: Math.ceil(count.rows[0].total/pageSize) });
 });
 
+app.get("/api/medicines/archived", auth, allow("ADMIN"), async (_req, res) => {
+  const result = await pool.query('SELECT m.id,m.barcode,m.generic_name AS "genericName",m.brand_name AS "brandName",m.medicine_type AS "medicineType",m.dosage_form AS "dosageForm",m.strength,m.prescription_required AS "prescriptionRequired",m.description,m.dosage_information AS "dosageInformation",m.precautions,m.contraindications,m.storage_information AS "storageInformation",m.supplier_id AS "supplierId",m.unit_price::float AS "unitPrice",COALESCE((SELECT sum(b.quantity) FROM medicine_batches b WHERE b.medicine_id=m.id),m.quantity)::int AS quantity,m.reorder_level AS "reorderLevel",m.expiration_date::text AS "expirationDate",m.batch_number AS "batchNumber",m.status,m.created_at AS "createdAt",m.updated_at AS "updatedAt" FROM medicines m WHERE m.status=\'INACTIVE\' ORDER BY m.updated_at DESC');
+  res.json({ medicines: result.rows });
+});
+
+app.post("/api/medicines/:id/restore", auth, allow("ADMIN"), async (req: AuthRequest, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query("UPDATE medicines SET status='ACTIVE',updated_at=now() WHERE id=$1 AND status='INACTIVE' RETURNING brand_name", [req.params.id]);
+    if (!result.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ code: "NOT_FOUND", error: "Archived medicine not found" }); }
+    await audit(client, req.user!.id, "RESTORE_MEDICINE", "MEDICINE", String(req.params.id), { brandName: result.rows[0].brand_name });
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  res.json({ id: req.params.id });
+});
+
 app.get("/api/medicines/:id", auth, async (req, res) => {
   const medicine = await pool.query('SELECT m.id,m.barcode,m.generic_name AS "genericName",m.brand_name AS "brandName",m.medicine_type AS "medicineType",m.dosage_form AS "dosageForm",m.strength,m.prescription_required AS "prescriptionRequired",m.description,m.dosage_information AS "dosageInformation",m.precautions,m.contraindications,m.storage_information AS "storageInformation",m.supplier_id AS "supplierId",m.unit_price::float AS "unitPrice",m.reorder_level AS "reorderLevel",m.status FROM medicines m WHERE m.id=$1 AND m.status=\'ACTIVE\'', [req.params.id]);
   if (!medicine.rowCount) return res.status(404).json({ code: "NOT_FOUND", error: "Medicine not found" });

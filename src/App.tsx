@@ -79,6 +79,7 @@ function App() {
   const [loginError, setLoginError] = useState("");
   const [appError, setAppError] = useState("");
   const [booting, setBooting] = useState(true);
+  const [inventoryFilter, setInventoryFilter] = useState<"all" | "low-stock">("all");
 
   useEffect(() => {
     let active = true;
@@ -207,7 +208,11 @@ function App() {
   const navigate = (nextPage: Page) => {
     if (visibleNav.some((item) => item.id === nextPage)) setPage(nextPage);
   };
-  return <SystemShell {...{ state, page, setPage, mobileOpen, setMobileOpen, currentUser, logout, lowStockCount, todayRevenue, visibleNav, refreshData, appError, setAppError, navigate }} />;
+  const showLowStock = () => {
+    setInventoryFilter("low-stock");
+    navigate("inventory");
+  };
+  return <SystemShell {...{ state, page, setPage, mobileOpen, setMobileOpen, currentUser, logout, lowStockCount, todayRevenue, visibleNav, refreshData, appError, setAppError, navigate, inventoryFilter, setInventoryFilter, showLowStock }} />;
 }
 
 function SystemShell({
@@ -225,6 +230,9 @@ function SystemShell({
   appError,
   setAppError,
   navigate,
+  inventoryFilter,
+  setInventoryFilter,
+  showLowStock,
 }: {
   state: PharmacyState;
   page: Page;
@@ -240,6 +248,9 @@ function SystemShell({
   appError: string;
   setAppError: React.Dispatch<React.SetStateAction<string>>;
   navigate: (page: Page) => void;
+  inventoryFilter: "all" | "low-stock";
+  setInventoryFilter: React.Dispatch<React.SetStateAction<"all" | "low-stock">>;
+  showLowStock: () => void;
 }) {
   return (
     <div className="app-shell flex h-screen bg-white text-slate-800">
@@ -312,10 +323,10 @@ function SystemShell({
         </header>
 
         <div className={`h-[calc(100%-73px)] overflow-auto p-4 md:p-6 ${page === "dashboard" ? "dashboard-scroll" : ""}`}>
-          {page === "dashboard" && <DashboardPage state={state} onNavigate={navigate} />}
+          {page === "dashboard" && <DashboardPage state={state} onNavigate={navigate} onLowStock={showLowStock} />}
           {appError && <div role="alert" className="mb-4 flex items-center justify-between rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><span>{appError}</span><button onClick={() => void refreshData().then(() => setAppError("")).catch((error) => setAppError(errorMessage(error)))} className="font-semibold underline">Retry</button></div>}
           {page === "pos" && <PosPage state={state} onRefresh={refreshData} />}
-          {page === "inventory" && <InventoryPage state={state} onRefresh={refreshData} />}
+          {page === "inventory" && <InventoryPage state={state} onRefresh={refreshData} lowStockOnly={inventoryFilter === "low-stock"} onClearLowStock={() => setInventoryFilter("all")} />}
           {page === "suppliers" && <SuppliersPage state={state} onRefresh={refreshData} />}
           {page === "users" && currentUser.role === "ADMIN" && <UsersPage state={state} onRefresh={refreshData} currentUser={currentUser} />}
           {page === "audit" && currentUser.role === "ADMIN" && <AuditPage />}
@@ -327,7 +338,7 @@ function SystemShell({
   );
 }
 
-function DashboardPage({ state, onNavigate }: { state: PharmacyState; onNavigate: (page: Page) => void }) {
+function DashboardPage({ state, onNavigate, onLowStock }: { state: PharmacyState; onNavigate: (page: Page) => void; onLowStock: () => void }) {
   const todaySales = state.sales.filter((sale) => dateKey(sale.transactionDate) === today());
   const totalRevenue = todaySales.reduce((sum, sale) => sum + sale.totalAmount, 0);
   const lowStock = state.medicines.filter((item) => item.quantity <= item.reorderLevel);
@@ -357,7 +368,7 @@ function DashboardPage({ state, onNavigate }: { state: PharmacyState; onNavigate
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard title="Today's Revenue" value={fmt(totalRevenue)} sub={`${todaySales.length} transactions`} onClick={() => onNavigate("reports")} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm3.25 10.07H12.75v3.18h-1.5v-3.18H8.75v-1.5h2.5V7.93h1.5v3.14h2.5v1.5Z" /></svg>} accent="bg-emerald-50 text-emerald-600" />
         <StatCard title="Medicines" value={String(state.medicines.length)} sub={`${state.medicines.filter((m) => m.quantity > 0).length} active`} onClick={() => onNavigate("inventory")} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-9Zm3 2.5h10v2H7V10Zm0 4h7v2H7v-2Z" /></svg>} accent="bg-sky-50 text-sky-600" />
-        <StatCard title="Low Stock" value={String(lowStock.length)} sub="Need reorder" onClick={() => onNavigate("inventory")} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm0 15a1.25 1.25 0 1 1-1.25-1.25A1.25 1.25 0 0 1 12 17.5Zm1.75-5.75h-3.5V7.5h3.5v4.25Z" /></svg>} accent="bg-amber-50 text-amber-600" />
+            <StatCard title="Low Stock" value={String(lowStock.length)} sub="Need reorder" onClick={onLowStock} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm0 15a1.25 1.25 0 1 1-1.25-1.25A1.25 1.25 0 0 1 12 17.5Zm1.75-5.75h-3.5V7.5h3.5v4.25Z" /></svg>} accent="bg-amber-50 text-amber-600" />
         <StatCard title="Expiring Soon" value={String(expiringSoon.length)} sub="Under 90 days" onClick={() => onNavigate("inventory")} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M5.5 15.5A6.5 6.5 0 1 1 18.5 15.5a6.5 6.5 0 0 1-13 0Zm7-8.25v6h2v1.5h-3.5v-7.5h1.5Z" /></svg>} accent="bg-rose-50 text-rose-600" />
       </div>
 
@@ -759,7 +770,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   );
 }
 
-function InventoryPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => Promise<PharmacyState> }) {
+function InventoryPage({ state, onRefresh, lowStockOnly, onClearLowStock }: { state: PharmacyState; onRefresh: () => Promise<PharmacyState>; lowStockOnly: boolean; onClearLowStock: () => void }) {
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<{ mode: "Add" | "Edit"; item?: Medicine } | null>(null);
   const [draft, setDraft] = useState<Partial<Medicine>>({});
@@ -768,10 +779,12 @@ function InventoryPage({ state, onRefresh }: { state: PharmacyState; onRefresh: 
   const [operationError, setOperationError] = useState("");
   const [referenceMedicine, setReferenceMedicine] = useState<Awaited<ReturnType<typeof api.medicineDetail>> | null>(null);
   const [referenceLoading, setReferenceLoading] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; confirmLabel: string; onConfirm: () => void } | null>(null);
 
   const filtered = state.medicines.filter((medicine) => {
     const q = search.toLowerCase();
-    return [medicine.brandName, medicine.genericName, medicine.barcode, medicine.batchNumber].some((field) => field.toLowerCase().includes(q));
+    const matchesSearch = [medicine.brandName, medicine.genericName, medicine.barcode, medicine.batchNumber].some((field) => field.toLowerCase().includes(q));
+    return matchesSearch && (!lowStockOnly || medicine.quantity <= medicine.reorderLevel);
   });
 
   const openAdd = () => {
@@ -809,6 +822,16 @@ function InventoryPage({ state, onRefresh }: { state: PharmacyState; onRefresh: 
       window.alert("Please complete all required fields.");
       return;
     }
+
+    if (modal?.mode === "Edit") {
+      setConfirmDialog({ title: "Save medicine update?", message: `Are you sure you want to save changes to ${draft.brandName}?`, confirmLabel: "Save update", onConfirm: () => void performSave() });
+      return;
+    }
+
+    await performSave();
+  };
+
+  const performSave = async () => {
 
     try {
       await api.saveMedicine(modal?.mode === "Edit" ? modal.item?.id : undefined, {
@@ -861,7 +884,12 @@ function InventoryPage({ state, onRefresh }: { state: PharmacyState; onRefresh: 
   };
 
   const deleteItem = async (itemId: string) => {
-    if (!window.confirm("Archive this medicine? It will no longer be available for sale.")) return;
+    const medicine = state.medicines.find((item) => item.id === itemId);
+    if (!medicine) return;
+    setConfirmDialog({ title: "Delete medicine?", message: `Are you sure you want to archive ${medicine.brandName}? You can recover it from Backups later.`, confirmLabel: "Delete medicine", onConfirm: () => void performDelete(itemId) });
+  };
+
+  const performDelete = async (itemId: string) => {
     try { await api.archiveMedicine(itemId); await onRefresh(); }
     catch (error) { window.alert(errorMessage(error)); }
   };
@@ -881,7 +909,10 @@ function InventoryPage({ state, onRefresh }: { state: PharmacyState; onRefresh: 
           <div className="text-xl font-bold text-slate-900">Inventory</div>
           <div className="text-sm text-slate-500">{state.medicines.length} medicine records tracked</div>
         </div>
-        <button onClick={openAdd} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-bold text-white shadow hover:bg-teal-500">Add medicine</button>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={onClearLowStock} className={`rounded-xl border px-4 py-2.5 text-sm font-bold ${lowStockOnly ? "border-amber-300 bg-amber-50 text-amber-800" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}>{lowStockOnly ? "Show all medicines" : "Show low stock"}</button>
+          <button onClick={openAdd} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-bold text-white shadow hover:bg-teal-500">Add medicine</button>
+        </div>
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1020,6 +1051,7 @@ function InventoryPage({ state, onRefresh }: { state: PharmacyState; onRefresh: 
       )}
       {referenceLoading && <div role="status" className="rounded-lg bg-white p-3 text-sm text-slate-500">Loading medicine reference...</div>}
       {referenceMedicine && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"><section className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-white shadow-2xl"><header className="flex items-start justify-between gap-4 border-b border-slate-100 p-5"><div><h2 className="text-lg font-bold text-slate-900">{referenceMedicine.brandName}</h2><p className="mt-1 text-xs text-slate-500">{referenceMedicine.genericName} · {referenceMedicine.strength}</p></div><button aria-label="Close medicine reference" onClick={() => setReferenceMedicine(null)} className="rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-600">Close</button></header><div className="space-y-4 p-5"><div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900">{referenceMedicine.notice}</div><p className="text-sm text-slate-700">{referenceMedicine.description || "No description provided."}</p><div className="grid gap-3 sm:grid-cols-2">{[["Dosage information",referenceMedicine.dosageInformation],["Precautions",referenceMedicine.precautions],["Contraindications",referenceMedicine.contraindications],["Storage",referenceMedicine.storageInformation]].map(([label,value]) => <div key={label} className="rounded-lg bg-slate-50 p-3"><div className="text-xs font-semibold text-slate-700">{label}</div><div className="mt-1 text-xs text-slate-600">{value || "Not specified."}</div></div>)}</div><div className="border-t border-slate-100 pt-3"><div className="mb-2 text-xs font-bold text-slate-700">Batch stock</div>{referenceMedicine.batches.map((batch) => <div key={batch.id} className="flex justify-between gap-3 py-1 text-xs text-slate-600"><span>{batch.batchNumber} · expires {batch.expirationDate}</span><span>{batch.quantity} units</span></div>)}</div></div></section></div>}
+      {confirmDialog && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"><div role="dialog" aria-modal="true" className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl"><h2 className="text-lg font-bold text-slate-900">{confirmDialog.title}</h2><p className="mt-2 text-sm text-slate-600">{confirmDialog.message}</p><div className="mt-6 flex justify-end gap-3"><button onClick={() => setConfirmDialog(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button><button onClick={() => { const confirm = confirmDialog.onConfirm; setConfirmDialog(null); confirm(); }} className="rounded-xl bg-teal-700 px-4 py-2.5 text-sm font-bold text-white">{confirmDialog.confirmLabel}</button></div></div></div>}
     </div>
   );
 }
@@ -1257,6 +1289,7 @@ function AuditPage() {
 
 function BackupsPage() {
   const [backups, setBackups] = useState<import("./api").BackupRecord[]>([]);
+  const [archivedMedicines, setArchivedMedicines] = useState<Medicine[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
@@ -1265,7 +1298,7 @@ function BackupsPage() {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    void api.backups().then((result) => { if (active) setBackups(result.backups); }).catch((reason) => { if (active) setError(errorMessage(reason)); }).finally(() => { if (active) setLoading(false); });
+    void Promise.all([api.backups(), api.archivedMedicines()]).then(([backupResult, archivedResult]) => { if (active) { setBackups(backupResult.backups); setArchivedMedicines(archivedResult.medicines); } }).catch((reason) => { if (active) setError(errorMessage(reason)); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [reloadKey]);
 
@@ -1277,6 +1310,13 @@ function BackupsPage() {
     finally { setCreating(false); }
   };
 
+  const restoreMedicine = async (medicine: Medicine) => {
+    if (!window.confirm(`Restore ${medicine.brandName} to active inventory?`)) return;
+    setError("");
+    try { await api.restoreMedicine(medicine.id); setReloadKey((key) => key + 1); }
+    catch (reason) { setError(errorMessage(reason)); }
+  };
+
   return (
     <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="flex items-center justify-between gap-3 border-b border-slate-100 p-4"><div><h2 className="text-sm font-bold text-slate-900">Database backups</h2><p className="mt-1 text-xs text-slate-500">{backups.length} recent backup records</p></div><button onClick={() => void createBackup()} disabled={creating} className="rounded-lg bg-teal-700 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{creating ? "Creating backup..." : "Create backup"}</button></div>
@@ -1286,6 +1326,10 @@ function BackupsPage() {
         {!loading && backups.length === 0 && <div className="p-8 text-center text-sm text-slate-500">No backups have been requested.</div>}
         {backups.map((backup) => <div key={backup.id} className="flex flex-wrap items-center justify-between gap-3 p-4"><div><div className="text-sm font-semibold text-slate-800">{backup.fileName ?? backup.id}</div><div className="mt-1 text-xs text-slate-500">Requested by {backup.requestedBy ?? "Unknown"} · {new Date(backup.requestedAt).toLocaleString()}</div>{backup.errorMessage && <div className="mt-1 text-xs text-rose-700">{backup.errorMessage}</div>}</div><div className="flex items-center gap-3"><span className={`rounded-full px-2 py-1 text-[10px] font-bold uppercase ${backup.status === "COMPLETED" ? "bg-emerald-50 text-emerald-700" : backup.status === "FAILED" ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-700"}`}>{backup.status}</span>{backup.fileSizeBytes != null && <span className="text-xs text-slate-500">{(backup.fileSizeBytes / 1048576).toFixed(2)} MB</span>}{backup.status === "COMPLETED" && <a href={`/api/backups/${encodeURIComponent(backup.id)}/download`} className="text-xs font-semibold text-teal-700">Download</a>}</div></div>)}
       </div>
+      <section className="border-t border-slate-100 p-4">
+        <div className="mb-3"><h3 className="text-sm font-bold text-slate-900">Deleted medicines</h3><p className="mt-1 text-xs text-slate-500">Archived medicines can be recovered here.</p></div>
+        {archivedMedicines.length === 0 ? <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No deleted medicines.</div> : <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="min-w-full text-left text-xs"><thead className="bg-slate-50 text-slate-600"><tr><th className="px-3 py-2">Medicine</th><th className="px-3 py-2">Barcode</th><th className="px-3 py-2">Stock</th><th className="px-3 py-2">Deleted/updated</th><th className="px-3 py-2" /></tr></thead><tbody className="divide-y divide-slate-100">{archivedMedicines.map((medicine) => <tr key={medicine.id}><td className="px-3 py-2"><div className="font-semibold text-slate-800">{medicine.brandName}</div><div className="text-slate-500">{medicine.genericName}</div></td><td className="px-3 py-2 text-slate-600">{medicine.barcode}</td><td className="px-3 py-2 text-slate-600">{medicine.quantity}</td><td className="px-3 py-2 text-slate-500">{new Date(medicine.updatedAt).toLocaleString()}</td><td className="px-3 py-2 text-right"><button onClick={() => void restoreMedicine(medicine)} className="font-semibold text-teal-700">Restore</button></td></tr>)}</tbody></table></div>}
+      </section>
     </section>
   );
 }
