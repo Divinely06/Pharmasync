@@ -12,7 +12,7 @@ export type AccessArea =
 export type PharmacyUser = {
   id: string;
   username: string;
-  passwordHash: string;
+  passwordHash?: string;
   fullName: string;
   role: UserRole;
   email: string;
@@ -55,6 +55,16 @@ export type Medicine = {
   expirationDate: string;
   batchNumber: string;
   status: "ACTIVE" | "INACTIVE";
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MedicineBatch = {
+  id: string;
+  medicineId: string;
+  batchNumber: string;
+  expirationDate: string;
+  quantity: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -122,10 +132,13 @@ export type InventoryTransaction = {
 
 export type AuditLog = {
   id: string;
-  userId: string;
+  userId: string | null;
+  actorName?: string | null;
+  actorUsername?: string | null;
   action: string;
   entityType: string;
   entityId: string;
+  entityName?: string | null;
   timestamp: string;
   metadata: Record<string, unknown>;
   success: boolean;
@@ -135,6 +148,7 @@ export type PharmacyState = {
   users: PharmacyUser[];
   suppliers: Supplier[];
   medicines: Medicine[];
+  medicineBatches: MedicineBatch[];
   purchases: PurchaseRecord[];
   purchaseItems: PurchaseItem[];
   sales: SaleRecord[];
@@ -425,6 +439,7 @@ export const seedState = (): PharmacyState => ({
   users: seededUsers,
   suppliers: seededSuppliers,
   medicines: seededMedicines,
+  medicineBatches: seededMedicines.map((medicine) => ({ id: `batch-${medicine.id}`, medicineId: medicine.id, batchNumber: medicine.batchNumber, expirationDate: medicine.expirationDate, quantity: medicine.quantity, createdAt: medicine.createdAt, updatedAt: medicine.updatedAt })),
   purchases: [],
   purchaseItems: [],
   sales: seededSales,
