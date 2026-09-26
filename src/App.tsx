@@ -36,6 +36,7 @@ type BarcodeDetectorConstructor = new (options: { formats: string[] }) => Barcod
 
 const PIE_COLORS = ["#0d9488", "#6366f1", "#f59e0b", "#ec4899", "#22c55e"];
 const pharmaBackground = "/background-phar.jpg";
+const appLogo = "/logo.png";
 
 const navMeta: { id: Page; label: string; area: AccessArea; icon: React.ReactNode }[] = [
   { id: "dashboard", label: "Dashboard", area: "DASHBOARD", icon: <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M3 10.5 12 3l9 7.5v9.75A1.75 1.75 0 0 1 19.25 21h-4.5v-6h-5.5v6h-4.5A1.75 1.75 0 0 1 3 20.25V10.5Z" /></svg> },
@@ -1391,7 +1392,8 @@ function ReportDownload({ title, format, description, onClick }: { title: string
 }
 
 function BrandMark({ large = false, className = "" }: { large?: boolean; className?: string }) {
-  return <span aria-hidden="true" className={`brand-mark ${large ? "brand-mark-large" : ""} ${className}`}><span /></span>;
+  const sizeClass = large ? "h-12 w-12 sm:h-14 sm:w-14" : "h-10 w-10";
+  return <img src={appLogo} alt="Pharmasync logo" className={`object-contain ${sizeClass} ${className}`} />;
 }
 
 function Field({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {

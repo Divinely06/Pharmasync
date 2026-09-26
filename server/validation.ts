@@ -20,7 +20,10 @@ export const isRequestOriginAllowed = (method: string, origin: string | undefine
   }
 
   if (normalizedAllowed) {
-    const configuredOrigins = normalizedAllowed.split(",").map((entry) => normalizeOrigin(entry.trim())).filter(Boolean);
+    const configuredOrigins = normalizedAllowed
+      .split(",")
+      .map((entry) => normalizeOrigin(entry.trim()))
+      .filter((entry): entry is string => Boolean(entry));
     if (configuredOrigins.includes(normalizedOrigin)) return true;
 
     try {
