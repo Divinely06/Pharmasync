@@ -3,6 +3,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { Pool, type PoolClient } from "pg";
 import bcrypt from "bcryptjs";
+import { validateSaleRequest } from "./sales.js";
 
 const connectionString = process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI;
 const pool = new Pool({ connectionString: connectionString ?? "", max: Number(process.env.DB_POOL_MAX ?? 2), ssl: connectionString?.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined });
@@ -50,7 +51,7 @@ app.post("/api/login", async (req, res) => {
 app.get("/api/state", auth, async (_req, res) => {
   const [users, suppliers, medicines, sales, saleItems, inventoryTransactions, auditLogs] = await Promise.all([
     pool.query('SELECT id, username, full_name AS "fullName", role, email, status, created_at AS "createdAt", updated_at AS "updatedAt", last_login AS "lastLogin" FROM users ORDER BY created_at'),
-    pool.query('SELECT id, supplier_name AS "supplierName", contact_person AS "contactPerson", phone, email, address, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM suppliers ORDER BY supplier_name'),
+    pool.query('SELECT id, supplier_name AS "supplierName", contact_person AS "contactPerson", phone, email, address, status, created_at AS "createdAt", updated_at AS "updatedAt" FROM suppliers WHERE status = \'ACTIVE\' ORDER BY supplier_name'),
     pool.query('SELECT id, barcode, generic_name AS "genericName", brand_name AS "brandName", medicine_type AS "medicineType", dosage_form AS "dosageForm", strength, prescription_required AS "prescriptionRequired", description, dosage_information AS "dosageInformation", precautions, contraindications, storage_information AS "storageInformation", supplier_id AS "supplierId", unit_price AS "unitPrice", quantity, reorder_level AS "reorderLevel", expiration_date AS "expirationDate", batch_number AS "batchNumber", status, created_at AS "createdAt", updated_at AS "updatedAt" FROM medicines WHERE status = \'ACTIVE\' ORDER BY brand_name'),
     pool.query('SELECT s.id, s.cashier_id AS "cashierId", u.full_name AS "cashierName", s.transaction_date AS "transactionDate", s.subtotal::float AS subtotal, s.discount::float AS discount, s.tax::float AS tax, s.total_amount::float AS "totalAmount", s.payment_method AS "paymentMethod", s.amount_received::float AS "amountReceived", s.change_amount::float AS "changeAmount", s.status FROM sales s JOIN users u ON u.id = s.cashier_id ORDER BY s.transaction_date DESC LIMIT 200'),
     pool.query('SELECT id, sale_id AS "saleId", medicine_id AS "medicineId", quantity, unit_price AS "unitPrice", subtotal FROM sale_items ORDER BY id'),
@@ -58,16 +59,101 @@ app.get("/api/state", auth, async (_req, res) => {
     pool.query('SELECT id, user_id AS "userId", action, entity_type AS "entityType", entity_id AS "entityId", occurred_at AS timestamp, metadata, success FROM audit_logs ORDER BY occurred_at DESC LIMIT 200'),
   ]); res.json({ users: users.rows, suppliers: suppliers.rows, medicines: medicines.rows, purchases: [], purchaseItems: [], sales: sales.rows, saleItems: saleItems.rows, inventoryTransactions: inventoryTransactions.rows, auditLogs: auditLogs.rows });
 });
+app.post("/api/suppliers", auth, async (req: AuthRequest, res) => {
+  if (req.user?.role !== "ADMIN" && req.user?.role !== "PHARMACIST") return res.status(403).json({ error: "Only admins and pharmacists can manage suppliers" });
+  const supplier = req.body as Record<string, unknown>;
+  const supplierName = String(supplier?.supplierName ?? "").trim();
+  const phone = String(supplier?.phone ?? "").trim();
+  if (!supplierName || !phone) return res.status(400).json({ error: "Supplier name and phone are required" });
+  const id = `sup-${randomBytes(10).toString("hex")}`;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("INSERT INTO suppliers (id, supplier_name, contact_person, phone, email, address) VALUES ($1,$2,$3,$4,$5,$6)", [id, supplierName, String(supplier.contactPerson ?? ""), phone, String(supplier.email ?? ""), String(supplier.address ?? "")]);
+    await audit(client, req.user.id, "CREATE_SUPPLIER", "SUPPLIER", id, { supplierName });
+    await client.query("COMMIT");
+    res.status(201).json({ id });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    res.status(400).json({ error: error instanceof Error ? error.message : "Unable to create supplier" });
+  } finally { client.release(); }
+});
+app.put("/api/suppliers/:id", auth, async (req: AuthRequest, res) => {
+  if (req.user?.role !== "ADMIN" && req.user?.role !== "PHARMACIST") return res.status(403).json({ error: "Only admins and pharmacists can manage suppliers" });
+  const supplier = req.body as Record<string, unknown>;
+  const supplierName = String(supplier?.supplierName ?? "").trim();
+  const phone = String(supplier?.phone ?? "").trim();
+  if (!supplierName || !phone) return res.status(400).json({ error: "Supplier name and phone are required" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query("UPDATE suppliers SET supplier_name=$2, contact_person=$3, phone=$4, email=$5, address=$6, updated_at=now() WHERE id=$1 AND status='ACTIVE' RETURNING id", [req.params.id, supplierName, String(supplier.contactPerson ?? ""), phone, String(supplier.email ?? ""), String(supplier.address ?? "")]);
+    if (!result.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ error: "Supplier not found" }); }
+    await audit(client, req.user.id, "UPDATE_SUPPLIER", "SUPPLIER", String(req.params.id), { supplierName });
+    await client.query("COMMIT");
+    res.json({ id: req.params.id });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    res.status(400).json({ error: error instanceof Error ? error.message : "Unable to update supplier" });
+  } finally { client.release(); }
+});
+app.delete("/api/suppliers/:id", auth, async (req: AuthRequest, res) => {
+  if (req.user?.role !== "ADMIN" && req.user?.role !== "PHARMACIST") return res.status(403).json({ error: "Only admins and pharmacists can manage suppliers" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query("UPDATE suppliers SET status='INACTIVE', updated_at=now() WHERE id=$1 AND status='ACTIVE' RETURNING supplier_name", [req.params.id]);
+    if (!result.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ error: "Supplier not found" }); }
+    await audit(client, req.user.id, "DELETE_SUPPLIER", "SUPPLIER", String(req.params.id), { supplierName: result.rows[0].supplier_name, softDelete: true });
+    await client.query("COMMIT");
+    res.status(204).end();
+  } catch (error) {
+    await client.query("ROLLBACK");
+    res.status(400).json({ error: error instanceof Error ? error.message : "Unable to delete supplier" });
+  } finally { client.release(); }
+});
+app.post("/api/users", auth, async (req: AuthRequest, res) => {
+  if (req.user?.role !== "ADMIN") return res.status(403).json({ error: "Only admins can create users" });
+  const user = req.body as Record<string, unknown>;
+  const username = String(user?.username ?? "").trim();
+  const fullName = String(user?.fullName ?? "").trim();
+  const email = String(user?.email ?? "").trim();
+  const password = String(user?.password ?? "");
+  const role = String(user?.role ?? "CASHIER");
+  if (!username || !fullName || !email || password.length < 8 || !["ADMIN", "PHARMACIST", "CASHIER"].includes(role)) {
+    return res.status(400).json({ error: "Provide a username, full name, email, valid role, and password of at least 8 characters" });
+  }
+  const id = `user-${randomBytes(10).toString("hex")}`;
+  const passwordHash = await bcrypt.hash(password, 12);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const duplicate = await client.query("SELECT 1 FROM users WHERE lower(username)=lower($1) OR lower(email)=lower($2)", [username, email]);
+    if (duplicate.rowCount) { await client.query("ROLLBACK"); return res.status(409).json({ error: "Username or email already exists" }); }
+    await client.query("INSERT INTO users (id, username, password_hash, full_name, role, email) VALUES ($1,$2,$3,$4,$5,$6)", [id, username, passwordHash, fullName, role, email]);
+    await audit(client, req.user.id, "CREATE_USER", "USER", id, { username, role });
+    await client.query("COMMIT");
+    res.status(201).json({ id });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    res.status(400).json({ error: error instanceof Error ? error.message : "Unable to create user" });
+  } finally { client.release(); }
+});
 app.post("/api/medicines", auth, async (req: AuthRequest, res) => {
   if (req.user?.role !== "ADMIN" && req.user?.role !== "PHARMACIST") return res.status(403).json({ error: "Only admins and pharmacists can manage medicines" });
   const medicine = req.body as Record<string, unknown>;
   const required = ["barcode", "genericName", "brandName", "medicineType", "dosageForm", "strength", "expirationDate", "batchNumber"];
   if (required.some((field) => !String(medicine[field] ?? "").trim())) return res.status(400).json({ error: "Required medicine fields are missing" });
+  const unitPrice = Number(medicine.unitPrice ?? 0);
+  const quantity = Number(medicine.quantity ?? 0);
+  const reorderLevel = Number(medicine.reorderLevel ?? 0);
+  if (!Number.isFinite(unitPrice) || unitPrice < 0 || !Number.isInteger(quantity) || quantity < 0 || !Number.isInteger(reorderLevel) || reorderLevel < 0) return res.status(400).json({ error: "Price and inventory values must be non-negative numbers; quantities must be whole numbers" });
   const client = await pool.connect();
   const id = `med-${randomBytes(10).toString("hex")}`;
   try {
     await client.query("BEGIN");
-    await client.query("INSERT INTO medicines (id, barcode, generic_name, brand_name, medicine_type, dosage_form, strength, prescription_required, description, dosage_information, precautions, contraindications, storage_information, supplier_id, unit_price, quantity, reorder_level, expiration_date, batch_number) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)", [id, medicine.barcode, medicine.genericName, medicine.brandName, medicine.medicineType, medicine.dosageForm, medicine.strength, Boolean(medicine.prescriptionRequired), medicine.description ?? "", medicine.dosageInformation ?? "", medicine.precautions ?? "", medicine.contraindications ?? "", medicine.storageInformation ?? "", medicine.supplierId || null, Number(medicine.unitPrice ?? 0), Number(medicine.quantity ?? 0), Number(medicine.reorderLevel ?? 0), medicine.expirationDate, medicine.batchNumber]);
+    await client.query("INSERT INTO medicines (id, barcode, generic_name, brand_name, medicine_type, dosage_form, strength, prescription_required, description, dosage_information, precautions, contraindications, storage_information, supplier_id, unit_price, quantity, reorder_level, expiration_date, batch_number) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)", [id, medicine.barcode, medicine.genericName, medicine.brandName, medicine.medicineType, medicine.dosageForm, medicine.strength, Boolean(medicine.prescriptionRequired), medicine.description ?? "", medicine.dosageInformation ?? "", medicine.precautions ?? "", medicine.contraindications ?? "", medicine.storageInformation ?? "", medicine.supplierId || null, unitPrice, quantity, reorderLevel, medicine.expirationDate, medicine.batchNumber]);
+    if (quantity > 0) await client.query("INSERT INTO inventory_transactions (id, medicine_id, transaction_type, quantity, previous_quantity, resulting_quantity, reference_id, performed_by, notes) VALUES ($1,$2,'ADJUSTMENT',$3,0,$3,$2,$4,'Opening inventory')", [`inv-${randomBytes(8).toString("hex")}`, id, quantity, req.user.id]);
     await audit(client, req.user.id, "CREATE_MEDICINE", "MEDICINE", id, { brandName: medicine.brandName });
     await client.query("COMMIT");
     res.status(201).json({ id });
@@ -81,11 +167,18 @@ app.put("/api/medicines/:id", auth, async (req: AuthRequest, res) => {
   const medicine = req.body as Record<string, unknown>;
   const required = ["barcode", "genericName", "brandName", "medicineType", "dosageForm", "strength", "expirationDate", "batchNumber"];
   if (required.some((field) => !String(medicine[field] ?? "").trim())) return res.status(400).json({ error: "Required medicine fields are missing" });
+  const unitPrice = Number(medicine.unitPrice ?? 0);
+  const quantity = Number(medicine.quantity ?? 0);
+  const reorderLevel = Number(medicine.reorderLevel ?? 0);
+  if (!Number.isFinite(unitPrice) || unitPrice < 0 || !Number.isInteger(quantity) || quantity < 0 || !Number.isInteger(reorderLevel) || reorderLevel < 0) return res.status(400).json({ error: "Price and inventory values must be non-negative numbers; quantities must be whole numbers" });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const result = await client.query("UPDATE medicines SET barcode=$2, generic_name=$3, brand_name=$4, medicine_type=$5, dosage_form=$6, strength=$7, prescription_required=$8, description=$9, dosage_information=$10, precautions=$11, contraindications=$12, storage_information=$13, supplier_id=$14, unit_price=$15, quantity=$16, reorder_level=$17, expiration_date=$18, batch_number=$19, updated_at=now() WHERE id=$1 AND status='ACTIVE' RETURNING id", [req.params.id, medicine.barcode, medicine.genericName, medicine.brandName, medicine.medicineType, medicine.dosageForm, medicine.strength, Boolean(medicine.prescriptionRequired), medicine.description ?? "", medicine.dosageInformation ?? "", medicine.precautions ?? "", medicine.contraindications ?? "", medicine.storageInformation ?? "", medicine.supplierId || null, Number(medicine.unitPrice ?? 0), Number(medicine.quantity ?? 0), Number(medicine.reorderLevel ?? 0), medicine.expirationDate, medicine.batchNumber]);
-    if (!result.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ error: "Medicine not found" }); }
+    const existing = await client.query("SELECT quantity FROM medicines WHERE id=$1 AND status='ACTIVE' FOR UPDATE", [req.params.id]);
+    if (!existing.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ error: "Medicine not found" }); }
+    const previousQuantity = Number(existing.rows[0].quantity);
+    await client.query("UPDATE medicines SET barcode=$2, generic_name=$3, brand_name=$4, medicine_type=$5, dosage_form=$6, strength=$7, prescription_required=$8, description=$9, dosage_information=$10, precautions=$11, contraindications=$12, storage_information=$13, supplier_id=$14, unit_price=$15, quantity=$16, reorder_level=$17, expiration_date=$18, batch_number=$19, updated_at=now() WHERE id=$1", [req.params.id, medicine.barcode, medicine.genericName, medicine.brandName, medicine.medicineType, medicine.dosageForm, medicine.strength, Boolean(medicine.prescriptionRequired), medicine.description ?? "", medicine.dosageInformation ?? "", medicine.precautions ?? "", medicine.contraindications ?? "", medicine.storageInformation ?? "", medicine.supplierId || null, unitPrice, quantity, reorderLevel, medicine.expirationDate, medicine.batchNumber]);
+    if (quantity !== previousQuantity) await client.query("INSERT INTO inventory_transactions (id, medicine_id, transaction_type, quantity, previous_quantity, resulting_quantity, reference_id, performed_by, notes) VALUES ($1,$2,'ADJUSTMENT',$3,$4,$5,$2,$6,$7)", [`inv-${randomBytes(8).toString("hex")}`, req.params.id, Math.abs(quantity - previousQuantity), previousQuantity, quantity, req.user.id, `Manual inventory adjustment from ${previousQuantity} to ${quantity}`]);
     await audit(client, req.user.id, "UPDATE_MEDICINE", "MEDICINE", String(req.params.id), { brandName: medicine.brandName });
     await client.query("COMMIT");
     res.json({ id: req.params.id });
@@ -111,14 +204,15 @@ app.delete("/api/medicines/:id", auth, async (req: AuthRequest, res) => {
 });
 app.post("/api/sales", auth, async (req: AuthRequest, res) => {
   if (req.user?.role !== "ADMIN" && req.user?.role !== "CASHIER") return res.status(403).json({ error: "Only cashiers and admins can complete sales" });
-  const body = req.body as { items?: { medicineId: string; quantity: number }[]; discount?: number; tax?: number; paymentMethod?: string; amountReceived?: number };
-  if (!body.items?.length || !body.paymentMethod) return res.status(400).json({ error: "Items and payment method are required" });
+  const validationError = validateSaleRequest(req.body);
+  if (validationError) return res.status(400).json({ error: validationError });
+  const body = req.body as { items: { medicineId: string; quantity: number }[]; discount?: number; paymentMethod: string; amountReceived?: number };
   const client = await pool.connect();
   try {
     await client.query("BEGIN"); const lines: { id: string; quantity: number; unitPrice: number; subtotal: number; brandName: string }[] = [];
-    for (const item of body.items) { const result = await client.query("SELECT id, brand_name, unit_price, quantity FROM medicines WHERE id = $1 AND status = 'ACTIVE' FOR UPDATE", [item.medicineId]); const medicine = result.rows[0]; if (!medicine || !Number.isInteger(item.quantity) || item.quantity < 1 || medicine.quantity < item.quantity) throw new Error(`Insufficient stock for ${medicine?.brand_name ?? item.medicineId}`); lines.push({ id: medicine.id, brandName: medicine.brand_name, quantity: item.quantity, unitPrice: Number(medicine.unit_price), subtotal: Number(medicine.unit_price) * item.quantity }); }
-    const subtotal = Number(lines.reduce((sum, line) => sum + line.subtotal, 0).toFixed(2)); const discount = Number(body.discount ?? 0); const tax = Number(body.tax ?? (subtotal * 0.1).toFixed(2)); const total = Number(Math.max(0, subtotal - discount + tax).toFixed(2)); const received = Number(body.amountReceived ?? total); if (body.paymentMethod === "Cash" && received < total) throw new Error("Cash amount must cover the total");
-    const saleId = `TXN-${Date.now().toString().slice(-8)}`; await client.query("INSERT INTO sales (id, cashier_id, subtotal, discount, tax, total_amount, payment_method, amount_received, change_amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)", [saleId, req.user.id, subtotal, discount, tax, total, body.paymentMethod, received, body.paymentMethod === "Cash" ? received - total : 0]);
+    for (const item of body.items) { const result = await client.query("SELECT id, brand_name, unit_price, quantity FROM medicines WHERE id = $1 AND status = 'ACTIVE' AND expiration_date >= CURRENT_DATE FOR UPDATE", [item.medicineId]); const medicine = result.rows[0]; if (!medicine || medicine.quantity < item.quantity) throw new Error(`Medicine is expired or has insufficient stock: ${medicine?.brand_name ?? item.medicineId}`); lines.push({ id: medicine.id, brandName: medicine.brand_name, quantity: item.quantity, unitPrice: Number(medicine.unit_price), subtotal: Number(medicine.unit_price) * item.quantity }); }
+    const subtotal = Number(lines.reduce((sum, line) => sum + line.subtotal, 0).toFixed(2)); const discount = Number(body.discount ?? 0); if (discount > subtotal) throw new Error("Discount cannot exceed the subtotal"); const tax = Number((subtotal * 0.1).toFixed(2)); const total = Number((subtotal - discount + tax).toFixed(2)); const received = Number(body.amountReceived ?? total); if (body.paymentMethod === "Cash" && received < total) throw new Error("Cash amount must cover the total");
+    const saleId = `TXN-${Date.now()}-${randomBytes(4).toString("hex")}`; await client.query("INSERT INTO sales (id, cashier_id, subtotal, discount, tax, total_amount, payment_method, amount_received, change_amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)", [saleId, req.user.id, subtotal, discount, tax, total, body.paymentMethod, received, body.paymentMethod === "Cash" ? received - total : 0]);
     for (const line of lines) { await client.query("INSERT INTO sale_items (id, sale_id, medicine_id, quantity, unit_price, subtotal) VALUES ($1,$2,$3,$4,$5,$6)", [`sale-item-${randomBytes(8).toString("hex")}`, saleId, line.id, line.quantity, line.unitPrice, line.subtotal]); const stock = await client.query("UPDATE medicines SET quantity = quantity - $1, updated_at = now() WHERE id = $2 RETURNING quantity", [line.quantity, line.id]); await client.query("INSERT INTO inventory_transactions (id, medicine_id, transaction_type, quantity, previous_quantity, resulting_quantity, reference_id, performed_by, notes) VALUES ($1,$2,'SALE',$3,$4,$5,$6,$7,$8)", [`inv-${randomBytes(8).toString("hex")}`, line.id, line.quantity, stock.rows[0].quantity + line.quantity, stock.rows[0].quantity, saleId, req.user.id, `POS sale ${saleId}`]); }
     await audit(client, req.user.id, "SALE_COMPLETED", "SALE", saleId, { total, paymentMethod: body.paymentMethod }); await client.query("COMMIT"); res.status(201).json({ id: saleId, subtotal, discount, tax, totalAmount: total, amountReceived: received, changeAmount: body.paymentMethod === "Cash" ? received - total : 0, items: lines });
   } catch (error) { await client.query("ROLLBACK"); res.status(400).json({ error: error instanceof Error ? error.message : "Sale failed" }); } finally { client.release(); }

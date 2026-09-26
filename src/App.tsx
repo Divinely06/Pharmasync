@@ -12,7 +12,6 @@ import {
   calculateTotals,
   canAccess,
   fmt,
-  hashPassword,
 } from "./data";
 import {
   BarChart,
@@ -81,6 +80,12 @@ const hydrateState = (databaseState: PharmacyState): PharmacyState => ({
     })),
   })),
 });
+
+const loadPharmacyState = async (apiToken: string | null): Promise<PharmacyState> => {
+  const response = await fetch("/api/state", { headers: { Authorization: `Bearer ${apiToken}` } });
+  if (!response.ok) throw new Error("Saved, but pharmacy data could not be refreshed.");
+  return hydrateState(await response.json() as PharmacyState);
+};
 
 function App() {
   const [state, setState] = useState<PharmacyState>(emptyState);
@@ -305,8 +310,8 @@ function SystemShell({
           {page === "dashboard" && <DashboardPage state={state} />}
           {page === "pos" && <PosPage state={state} setState={setState} user={currentUser} apiToken={apiToken} />}
           {page === "inventory" && <InventoryPage state={state} setState={setState} apiToken={apiToken} />}
-          {page === "suppliers" && <SuppliersPage state={state} setState={setState} />}
-          {page === "users" && currentUser.role === "ADMIN" && <UsersPage state={state} setState={setState} />}
+          {page === "suppliers" && <SuppliersPage state={state} setState={setState} apiToken={apiToken} />}
+          {page === "users" && currentUser.role === "ADMIN" && <UsersPage state={state} setState={setState} apiToken={apiToken} />}
           {page === "audit" && currentUser.role === "ADMIN" && <AuditPage logs={state.auditLogs} />}
           {page === "reports" && <ReportsPage state={state} />}
         </div>
@@ -426,11 +431,13 @@ function PosPage({ state, setState, user, apiToken }: { state: PharmacyState; se
   const items = state.medicines.filter((medicine) => {
     const matchCategory = category === "All" || medicine.medicineType === category;
     const matchSearch = [medicine.brandName, medicine.genericName, medicine.barcode].some((field) => field.toLowerCase().includes(search.toLowerCase()));
-    return matchCategory && matchSearch && medicine.quantity > 0;
+    const isUnexpired = medicine.expirationDate >= new Date().toISOString().slice(0, 10);
+    return matchCategory && matchSearch && medicine.quantity > 0 && isUnexpired;
   });
 
   const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
-  const discountValue = Number(discount || 0);
+  const requestedDiscount = Number(discount || 0);
+  const discountValue = Math.min(subtotal, Math.max(0, Number.isFinite(requestedDiscount) ? requestedDiscount : 0));
   const taxValue = Number((subtotal * 0.1).toFixed(2));
   const total = Number(Math.max(0, subtotal - discountValue + taxValue).toFixed(2));
   const change = Number((Number(amountReceived || 0) - total).toFixed(2));
@@ -449,7 +456,8 @@ function PosPage({ state, setState, user, apiToken }: { state: PharmacyState; se
     setCart((prev) =>
       prev.flatMap((item) => {
         if (item.id !== medicineId) return [item];
-        const safeValue = Math.max(1, nextQty);
+        const available = state.medicines.find((medicine) => medicine.id === medicineId)?.quantity ?? item.quantity;
+        const safeValue = Math.min(available, Math.max(1, Math.floor(nextQty)));
         return [{ ...item, quantity: safeValue }];
       })
     );
@@ -606,7 +614,7 @@ function PosPage({ state, setState, user, apiToken }: { state: PharmacyState; se
             </div>
             <div>
               <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Discount</label>
-              <input value={discount} onChange={(e) => setDiscount(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
+              <input type="number" min="0" max={subtotal} value={discount} onChange={(e) => setDiscount(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
             </div>
           </div>
           {paymentMethod === 'Cash' && (
@@ -825,41 +833,43 @@ function InventoryPage({ state, setState, apiToken }: { state: PharmacyState; se
   );
 }
 
-function SuppliersPage({ state, setState }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>> }) {
+function SuppliersPage({ state, setState, apiToken }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>>; apiToken: string | null }) {
   const [draft, setDraft] = useState<Partial<Supplier>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  const save = () => {
+  const save = async () => {
     if (!draft.supplierName || !draft.phone) {
       window.alert("Supplier name and phone are required.");
       return;
     }
 
-    if (editingId) {
-      setState((prev) => ({
-        ...prev,
-        suppliers: prev.suppliers.map((supplier) => supplier.id === editingId ? { ...supplier, ...draft, updatedAt: new Date().toISOString() } : supplier),
-      }));
-    } else {
-      const next: Supplier = {
-        id: `sup-${Date.now()}`,
-        supplierName: String(draft.supplierName),
-        contactPerson: String(draft.contactPerson ?? ""),
-        phone: String(draft.phone),
-        email: String(draft.email ?? ""),
-        address: String(draft.address ?? ""),
-        status: "ACTIVE",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      setState((prev) => ({ ...prev, suppliers: [next, ...prev.suppliers] }));
+    try {
+      const response = await fetch(editingId ? `/api/suppliers/${editingId}` : "/api/suppliers", {
+        method: editingId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiToken}` },
+        body: JSON.stringify(draft),
+      });
+      const result = response.status === 204 ? null : await response.json();
+      if (!response.ok) throw new Error(result?.error ?? "Unable to save supplier.");
+      setState(await loadPharmacyState(apiToken));
+      setDraft({});
+      setEditingId(null);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Unable to save supplier.");
     }
-    setDraft({});
-    setEditingId(null);
   };
 
-  const remove = (id: string) => {
-    setState((prev) => ({ ...prev, suppliers: prev.suppliers.filter((supplier) => supplier.id !== id) }));
+  const remove = async (id: string) => {
+    try {
+      const response = await fetch(`/api/suppliers/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${apiToken}` } });
+      if (!response.ok) {
+        const result = await response.json();
+        throw new Error(result.error ?? "Unable to delete supplier.");
+      }
+      setState(await loadPharmacyState(apiToken));
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Unable to delete supplier.");
+    }
   };
 
   return (
@@ -902,29 +912,28 @@ function SuppliersPage({ state, setState }: { state: PharmacyState; setState: Re
   );
 }
 
-function UsersPage({ state, setState }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>> }) {
+function UsersPage({ state, setState, apiToken }: { state: PharmacyState; setState: React.Dispatch<React.SetStateAction<PharmacyState>>; apiToken: string | null }) {
   const [draft, setDraft] = useState<Partial<PharmacyUser & { password: string }>>({ password: "" });
 
-  const save = () => {
-    if (!draft.username || !draft.fullName || !draft.email) {
-      window.alert("Username, full name and email are required.");
+  const save = async () => {
+    if (!draft.username || !draft.fullName || !draft.email || !draft.password || draft.password.length < 8) {
+      window.alert("Username, full name, email and a password of at least 8 characters are required.");
       return;
     }
-    const nextUser: PharmacyUser = {
-      id: `u-${Date.now()}`,
-      username: String(draft.username),
-      passwordHash: hashPassword(String(draft.password ?? "welcome123")),
-      fullName: String(draft.fullName),
-      role: (draft.role as UserRole) ?? "CASHIER",
-      email: String(draft.email),
-      status: "ACTIVE",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      lastLogin: null,
-    };
 
-    setState((prev) => ({ ...prev, users: [nextUser, ...prev.users] }));
-    setDraft({ password: "" });
+    try {
+      const response = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiToken}` },
+        body: JSON.stringify({ username: draft.username, fullName: draft.fullName, email: draft.email, password: draft.password, role: draft.role ?? "CASHIER" }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "Unable to create user.");
+      setState(await loadPharmacyState(apiToken));
+      setDraft({ password: "" });
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Unable to create user.");
+    }
   };
 
   return (

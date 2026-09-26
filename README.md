@@ -29,6 +29,6 @@ For a Clever Cloud application, use `pnpm start` as the run command. The API aut
 pnpm db:migrate
 ```
 
-This creates the pharmacy tables and inserts the demo accounts and reference medicines. Start the API with `pnpm api`; it listens on port `8787` by default. Check the connection with `curl http://localhost:8787/api/health`.
+This creates the pharmacy tables and demo accounts. Inventory starts empty; add medicines and suppliers after signing in. Start the API with `pnpm api`; it listens on port `8787` by default. Check the connection with `curl http://localhost:8787/api/health`.
 
 Demo accounts are `admin` / `admin123`, `pharmacist` / `pharma123`, and `cashier` / `cashier123`. Change these credentials before using the system outside a demo environment.

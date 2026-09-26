@@ -185,15 +185,6 @@ export const fmt = (n: number) =>
     maximumFractionDigits: 2,
   })
 
-export const hashPassword = (value: string) => {
-  let hash = 0
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash << 5) - hash + value.charCodeAt(i)
-    hash |= 0
-  }
-  return `hash-${Math.abs(hash).toString(16)}`
-}
-
 export const buildAuditLog = ({
   userId,
   action,
