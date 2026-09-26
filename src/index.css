@@ -61,33 +61,7 @@ select:focus-visible {
 .login-background {
   position: relative;
   overflow: hidden;
-  background-color: #f8fafc;
-}
-
-.login-background::before,
-.login-background::after {
-  position: absolute;
-  content: "";
-  pointer-events: none;
-  border: 1px solid rgba(44, 105, 117, 0.08);
-  border-radius: 999px;
-  transform: rotate(28deg);
-}
-
-.login-background::before {
-  width: min(300px, 38vw);
-  height: min(92px, 12vw);
-  right: 9%;
-  top: 13%;
-  box-shadow: -360px 440px 0 -1px rgba(104, 178, 160, 0.07);
-}
-
-.login-background::after {
-  width: min(220px, 28vw);
-  height: min(68px, 9vw);
-  left: 9%;
-  bottom: 13%;
-  background: rgba(255, 255, 255, 0.18);
+  background: #ffffff;
 }
 
 .brand-mark {
