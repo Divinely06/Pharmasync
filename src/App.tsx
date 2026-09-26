@@ -573,8 +573,17 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   const removeFromCart = (medicineId: string) => setCart((prev) => prev.filter((item) => item.id !== medicineId));
 
   const completeSale = async (saleId: string) => {
-    await onRefresh();
-    setReceipt(await api.receipt(saleId));
+    const loaded = await onRefresh();
+    const sale = loaded.sales.find((entry) => entry.id === saleId);
+    if (!sale) throw new Error("The sale was completed, but its receipt details could not be loaded.");
+    setReceipt({
+      ...sale,
+      paymentStatus: sale.status === "COMPLETED" ? "PAID" : sale.status,
+      provider: null,
+      providerReference: null,
+      simulated: false,
+      items: sale.items.map((item) => ({ ...item, batches: [] })),
+    });
     setPendingPayment(null);
     setCart([]);
     setDiscount("0");
