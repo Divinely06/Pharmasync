@@ -67,8 +67,14 @@ const hydrateState = (source: PharmacyState): PharmacyState => ({
 });
 
 const errorMessage = (error: unknown) => error instanceof ApiError ? `${error.message} (${error.status}${error.code ? ` · ${error.code}` : ""})` : error instanceof Error ? error.message : "The request could not be completed.";
-const dateKey = (value: string | Date) => new Date(value).toLocaleDateString("en-CA");
+const dateKey = (value: string | Date) => {
+  const raw = value instanceof Date ? value.toISOString() : value;
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  return new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value));
+};
 const today = () => dateKey(new Date());
+const daysUntil = (date: string | Date) => (Date.parse(`${dateKey(date)}T00:00:00Z`) - Date.parse(`${today()}T00:00:00Z`)) / 86400000;
+const isExpiringSoon = (date: string | Date) => daysUntil(date) > 0 && daysUntil(date) <= 90;
 const chartCurrency = (value: number) => {
   if (value === 0) return "₱0";
   if (Math.abs(value) >= 1000) {
@@ -356,10 +362,7 @@ function DashboardPage({ state, onNavigate, onLowStock, onExpiringSoon }: { stat
   const todaySales = state.sales.filter((sale) => dateKey(sale.transactionDate) === today());
   const totalRevenue = todaySales.reduce((sum, sale) => sum + sale.totalAmount, 0);
   const lowStock = state.medicines.filter((item) => item.quantity <= item.reorderLevel);
-  const expiringSoon = state.medicines.filter((item) => {
-    const days = (new Date(item.expirationDate).getTime() - new Date(today()).getTime()) / 86400000;
-    return days <= 90 && days > 0;
-  });
+  const expiringSoon = state.medicines.filter((item) => isExpiringSoon(item.expirationDate));
   const weekStart = new Date();
   weekStart.setHours(0, 0, 0, 0);
   weekStart.setDate(weekStart.getDate() - 6);
@@ -810,8 +813,7 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
     const q = search.toLowerCase();
     const matchesSearch = [medicine.brandName, medicine.genericName, medicine.barcode, medicine.batchNumber].some((field) => field.toLowerCase().includes(q));
     const matchesLowStock = !lowStockOnly || medicine.quantity <= medicine.reorderLevel;
-    const daysToExpiry = (new Date(medicine.expirationDate).getTime() - new Date(today()).getTime()) / 86400000;
-    const matchesExpiringSoon = !expiringSoonOnly || (daysToExpiry > 0 && daysToExpiry <= 90);
+    const matchesExpiringSoon = !expiringSoonOnly || isExpiringSoon(medicine.expirationDate);
     return matchesSearch && matchesLowStock && matchesExpiringSoon;
   });
 
