@@ -191,7 +191,7 @@ app.get("/api/reports/sales.csv", auth, allow("ADMIN", "PHARMACIST"), async (req
   const { from, to } = parsed.data;
   if (from && to && from > to) return res.status(400).json({ code: "INVALID_FILTER", error: "Start date must be on or before end date" });
   const result = await pool.query('SELECT s.id,s.transaction_date AS "transactionDate",u.full_name AS "cashierName",s.payment_method AS "paymentMethod",s.subtotal::float,s.discount::float,s.tax::float,s.total_amount::float AS "totalAmount",COALESCE((SELECT string_agg(m.brand_name || \' x \' || si.quantity, \'; \' ORDER BY m.brand_name) FROM sale_items si JOIN medicines m ON m.id=si.medicine_id WHERE si.sale_id=s.id),\'\') AS items FROM sales s JOIN users u ON u.id=s.cashier_id WHERE s.status=\'COMPLETED\' AND ($1::date IS NULL OR s.transaction_date::date >= $1::date) AND ($2::date IS NULL OR s.transaction_date::date <= $2::date) ORDER BY s.transaction_date DESC LIMIT 100001', [from ?? null,to ?? null]);
-  if (result.rowCount > 100000) return res.status(413).json({ code: "REPORT_TOO_LARGE", error: "Narrow the date range to export at most 100,000 transactions" });
+  if ((result.rowCount ?? 0) > 100000) return res.status(413).json({ code: "REPORT_TOO_LARGE", error: "Narrow the date range to export at most 100,000 transactions" });
   const cell = (value: unknown) => {
     const text = String(value ?? "");
     const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
@@ -282,7 +282,7 @@ app.patch("/api/medicines/:id", auth, allow("ADMIN", "PHARMACIST"), async (req: 
       { field: "unitPrice", from: Number(current.unit_price), to: Number(b.unitPrice) },
       { field: "reorderLevel", from: current.reorder_level, to: Number(b.reorderLevel) },
     ].filter((change) => String(change.from ?? "") !== String(change.to ?? ""));
-    await audit(client, req.user!.id, "UPDATE_MEDICINE", "MEDICINE", req.params.id, { brandName: b.brandName, changes });
+    await audit(client, req.user!.id, "UPDATE_MEDICINE", "MEDICINE", String(req.params.id), { brandName: b.brandName, changes });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   res.json({ id: req.params.id });
@@ -293,7 +293,7 @@ app.delete("/api/medicines/:id", auth, allow("ADMIN", "PHARMACIST"), async (req:
     await client.query("BEGIN");
     const result = await client.query("UPDATE medicines SET status='INACTIVE',updated_at=now() WHERE id=$1 AND status='ACTIVE' RETURNING brand_name", [req.params.id]);
     if (!result.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ code: "NOT_FOUND", error: "Medicine not found" }); }
-    await audit(client, req.user!.id, "ARCHIVE_MEDICINE", "MEDICINE", req.params.id, { brandName: result.rows[0].brand_name });
+    await audit(client, req.user!.id, "ARCHIVE_MEDICINE", "MEDICINE", String(req.params.id), { brandName: result.rows[0].brand_name });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   res.json({ ok: true });
@@ -331,7 +331,7 @@ app.patch("/api/suppliers/:id", auth, allow("ADMIN", "PHARMACIST"), async (req: 
       { field: "email", from: before.email, to: b.email ?? "" },
       { field: "address", from: before.address, to: b.address ?? "" },
     ].filter((change) => String(change.from ?? "") !== String(change.to ?? ""));
-    await audit(client, req.user!.id, "UPDATE_SUPPLIER", "SUPPLIER", req.params.id, { changes });
+    await audit(client, req.user!.id, "UPDATE_SUPPLIER", "SUPPLIER", String(req.params.id), { changes });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   res.json({ id: req.params.id });
@@ -342,7 +342,7 @@ app.delete("/api/suppliers/:id", auth, allow("ADMIN", "PHARMACIST"), async (req:
     await client.query("BEGIN");
     const result = await client.query("UPDATE suppliers SET status='INACTIVE',updated_at=now() WHERE id=$1 AND status='ACTIVE' RETURNING supplier_name", [req.params.id]);
     if (!result.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ code: "NOT_FOUND", error: "Supplier not found" }); }
-    await audit(client, req.user!.id, "DEACTIVATE_SUPPLIER", "SUPPLIER", req.params.id, { supplierName: result.rows[0].supplier_name });
+    await audit(client, req.user!.id, "DEACTIVATE_SUPPLIER", "SUPPLIER", String(req.params.id), { supplierName: result.rows[0].supplier_name });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   res.json({ ok: true });
@@ -379,7 +379,7 @@ app.patch("/api/users/:id", auth, allow("ADMIN"), async (req: AuthRequest, res) 
       { field: "email", from: before.email, to: body.email.trim().toLowerCase() },
       { field: "role", from: before.role, to: body.role },
     ].filter((change) => change.from !== change.to);
-    await audit(client,req.user!.id,"UPDATE_USER","USER",req.params.id,{ changes });
+    await audit(client,req.user!.id,"UPDATE_USER","USER",String(req.params.id),{ changes });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   res.json({ id: req.params.id });
@@ -393,7 +393,7 @@ app.delete("/api/users/:id", auth, allow("ADMIN"), async (req: AuthRequest, res)
     const result = await client.query("UPDATE users SET status='INACTIVE',updated_at=now() WHERE id=$1 AND status='ACTIVE' RETURNING username,full_name", [req.params.id]);
     if (!result.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ code: "NOT_FOUND", error: "Active user not found" }); }
     await client.query("DELETE FROM sessions WHERE user_id=$1", [req.params.id]);
-    await audit(client,req.user!.id,"DEACTIVATE_USER","USER",req.params.id,{ username:result.rows[0].username,fullName:result.rows[0].full_name });
+    await audit(client,req.user!.id,"DEACTIVATE_USER","USER",String(req.params.id),{ username:result.rows[0].username,fullName:result.rows[0].full_name });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   res.json({ id: req.params.id, status: "INACTIVE" });
@@ -410,7 +410,7 @@ app.post("/api/users/:id/reset-password", auth, allow("ADMIN"), async (req: Auth
     if (!user.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ code: "NOT_FOUND", error: "Active user not found" }); }
     await client.query("UPDATE users SET password_hash=$2,updated_at=now() WHERE id=$1", [req.params.id,await bcrypt.hash(parsed.data.password,12)]);
     await client.query("DELETE FROM sessions WHERE user_id=$1", [req.params.id]);
-    await audit(client,req.user!.id,"RESET_USER_PASSWORD","USER",req.params.id,{ username:user.rows[0].username,sessionsRevoked:true });
+    await audit(client,req.user!.id,"RESET_USER_PASSWORD","USER",String(req.params.id),{ username:user.rows[0].username,sessionsRevoked:true });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   res.json({ id: req.params.id, ok: true });
@@ -474,7 +474,7 @@ app.post("/api/purchases/:id/receive", auth, allow("ADMIN", "PHARMACIST"), async
       await client.query("INSERT INTO inventory_transactions (id,medicine_id,transaction_type,quantity,previous_quantity,resulting_quantity,reference_id,performed_by,notes) VALUES ($1,$2,'PURCHASE',$3,$4,$5,$6,$7,$8)", [`inv-${randomUUID()}`,item.medicine_id,item.quantity,previous,updated.rows[0].quantity,req.params.id,req.user!.id,`Received ${purchase.rows[0].reference_number}, batch ${item.batch_number}`]);
     }
     await client.query("UPDATE purchases SET status='RECEIVED' WHERE id=$1", [req.params.id]);
-    await audit(client,req.user!.id,"RECEIVE_PURCHASE","PURCHASE",req.params.id,{ referenceNumber:purchase.rows[0].reference_number,itemCount:items.rowCount });
+    await audit(client,req.user!.id,"RECEIVE_PURCHASE","PURCHASE",String(req.params.id),{ referenceNumber:purchase.rows[0].reference_number,itemCount:items.rowCount });
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -495,7 +495,7 @@ app.post("/api/purchases/:id/cancel", auth, allow("ADMIN", "PHARMACIST"), async 
       await client.query("ROLLBACK");
       return res.status(existing.rowCount ? 409 : 404).json({ code: existing.rowCount ? "INVALID_STATE" : "NOT_FOUND", error: existing.rowCount ? "Only pending purchases can be cancelled" : "Purchase not found" });
     }
-    await audit(client,req.user!.id,"CANCEL_PURCHASE","PURCHASE",req.params.id,{ referenceNumber:purchase.rows[0].reference_number });
+    await audit(client,req.user!.id,"CANCEL_PURCHASE","PURCHASE",String(req.params.id),{ referenceNumber:purchase.rows[0].reference_number });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   res.json({ id: req.params.id, status: "CANCELLED" });

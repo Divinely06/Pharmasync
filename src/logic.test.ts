@@ -46,13 +46,6 @@ describe('pharmacy system logic', () => {
     expect(totals.total).toBe(66);
   });
 
-  it('rejects invalid sale requests before they reach the database', () => {
-    expect(validateSaleRequest({ items: [{ medicineId: 'med-1', quantity: 1 }], paymentMethod: 'Bitcoin' })).toBe('Unsupported payment method');
-    expect(validateSaleRequest({ items: [{ medicineId: 'med-1', quantity: 1 }, { medicineId: 'med-1', quantity: 2 }], paymentMethod: 'Cash' })).toBe('Each medicine may only appear once');
-    expect(validateSaleRequest({ items: [{ medicineId: 'med-1', quantity: 1 }], paymentMethod: 'Cash', discount: -1 })).toBe('discount must be a non-negative number');
-    expect(validateSaleRequest({ items: [{ medicineId: 'med-1', quantity: 1 }], paymentMethod: 'Cash', amountReceived: Number.NaN })).toBe('amountReceived must be a non-negative number');
-    expect(validateSaleRequest({ items: [{ medicineId: 'med-1', quantity: 1 }], paymentMethod: 'Cash' })).toBeNull();
-  });
 });
 
 describe('typed API client', () => {

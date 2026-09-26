@@ -168,12 +168,6 @@ export const CATEGORIES = [
   "Dermatology",
 ]
 
-export const WEEKLY_SALES: {
-  day: string
-  revenue: number
-  transactions: number
-}[] = []
-
 export const ROLE_ACCESS: Record<UserRole, AccessArea[]> = {
   ADMIN: [
     "DASHBOARD",
@@ -236,7 +230,7 @@ const seededUsers: PharmacyUser[] = [
   {
     id: "u-admin",
     username: "admin",
-    passwordHash: hashPassword("admin123"),
+    passwordHash: "",
     fullName: "Admin User",
     role: "ADMIN",
     email: "admin@pharmasync.local",
@@ -248,7 +242,7 @@ const seededUsers: PharmacyUser[] = [
   {
     id: "u-pharmacist",
     username: "pharmacist",
-    passwordHash: hashPassword("pharma123"),
+    passwordHash: "",
     fullName: "Alicia Mercado",
     role: "PHARMACIST",
     email: "pharmacist@pharmasync.local",
@@ -260,7 +254,7 @@ const seededUsers: PharmacyUser[] = [
   {
     id: "u-cashier",
     username: "cashier",
-    passwordHash: hashPassword("cashier123"),
+    passwordHash: "",
     fullName: "Maria Santos",
     role: "CASHIER",
     email: "cashier@pharmasync.local",
