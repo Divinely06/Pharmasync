@@ -666,7 +666,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
             <div className="text-xs text-teal-100">Your receipt is ready to print</div>
           </div>
           <div className="space-y-4 p-5">
-            <div className="text-center text-sm text-slate-700"><div className="font-extrabold tracking-wide">ABC PHARMACY</div><div>123 Main Street</div><div>Quezon City</div><div>Tel: 0912-345-6789</div></div>
+            <div className="text-center text-sm text-slate-700"><div className="font-extrabold tracking-wide">Hopemed Pharmacy</div><div>Dollar street</div><div>North Fairview</div><div>Tel: (+63) 912-345-6789</div></div>
             <div className="border-y border-dashed border-slate-300 py-3 text-xs text-slate-600"><div className="flex justify-between"><span>Receipt No.:</span><span>{receipt.id}</span></div><div className="flex justify-between"><span>Date:</span><span>{new Date(receipt.transactionDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span></div><div className="flex justify-between"><span>Cashier:</span><span>{receipt.cashierName}</span></div></div>
             <div className="text-xs text-slate-700"><div className="mb-2 grid grid-cols-[1fr_auto_auto] gap-3 border-b border-slate-300 pb-2 font-bold"><span>Product</span><span>Qty</span><span>Price</span></div>{receipt.items.map((item) => <div key={item.medicineId} className="grid grid-cols-[1fr_auto_auto] gap-3 py-1"><span>{item.medicineName}</span><span>{item.quantity}</span><span>{fmt(item.subtotal)}</span></div>)}</div>
             <div className="border-y border-dashed border-slate-300 py-3 text-sm"><div className="flex justify-between text-slate-600"><span>Subtotal</span><span>{fmt(receipt.subtotal)}</span></div><div className="flex justify-between text-slate-600"><span>Discount</span><span>{fmt(receipt.discount)}</span></div><div className="flex justify-between text-slate-600"><span>VAT</span><span>{fmt(receipt.tax)}</span></div><div className="mt-1 flex justify-between text-base font-extrabold text-slate-900"><span>TOTAL</span><span>{fmt(receipt.totalAmount)}</span></div></div>
@@ -1472,17 +1472,17 @@ function ReportsPage({ state }: { state: PharmacyState }) {
     URL.revokeObjectURL(url);
   };
 
-  const exportSales = async () => {
-    try {
-      const blob = await api.salesReportCsv(applied);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `sales-${applied.from}-${applied.to}.csv`;
-      link.click();
-      URL.revokeObjectURL(url);
-    } catch (reason) { setError(errorMessage(reason)); }
+  const exportSales = () => {
+    const filteredSales = sales.filter((sale) => {
+      const date = dateKey(sale.transactionDate);
+      return date >= applied.from && date <= applied.to;
+    });
+    download(`sales-${applied.from}-${applied.to}.csv`, [
+      ["Transaction", "Date", "Cashier", "Payment", "Subtotal", "Discount", "VAT", "Total", "Items"],
+      ...filteredSales.map((sale) => [sale.id, sale.transactionDate, sale.cashierName, sale.paymentMethod, String(sale.subtotal), String(sale.discount), String(sale.tax), String(sale.totalAmount), sale.items.map((item) => `${item.medicineName} x ${item.quantity}`).join("; ")]),
+    ]);
   };
+  const revenueByPayment = byPayment.length > 0 ? byPayment : Object.entries(sales.reduce<Record<string, number>>((totals, sale) => ({ ...totals, [sale.paymentMethod]: (totals[sale.paymentMethod] ?? 0) + sale.totalAmount }), {})).map(([name, value]) => ({ name, value }));
   const exportInventory = () => download("inventory-report.csv", [["Medicine", "Barcode", "Stock", "Reorder level", "Unit price", "Expiration"], ...state.medicines.map((medicine) => [medicine.brandName, medicine.barcode, String(medicine.quantity), String(medicine.reorderLevel), String(medicine.unitPrice), medicine.expirationDate])]);
 
   return (
@@ -1526,7 +1526,7 @@ function ReportsPage({ state }: { state: PharmacyState }) {
         </ReportPanel>
       </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="mb-3"><div className="text-sm font-bold text-slate-900">Generate Reports</div><div className="text-xs text-slate-500">Download structured reports for inventory and business monitoring</div></div><div className="grid gap-3 md:grid-cols-2"><ReportDownload title="Monthly Inventory Report" format="CSV" description="Stock levels, reorder points, and expiration dates" onClick={exportInventory} /><ReportDownload title="Sales Transaction Log" format="CSV" description="Completed transactions and payment details" onClick={exportSales} /><ReportDownload title="Revenue Summary" format="CSV" description="Revenue totals by payment method" onClick={() => download("revenue-summary.csv", [["Payment method", "Revenue"], ...byPayment.map((entry) => [entry.name, String(entry.value)])])} /><ReportDownload title="Low Stock Alert Report" format="CSV" description="Items below their configured reorder level" onClick={() => download("low-stock-report.csv", [["Medicine", "Current stock", "Reorder level"], ...state.medicines.filter((medicine) => medicine.quantity <= medicine.reorderLevel).map((medicine) => [medicine.brandName, String(medicine.quantity), String(medicine.reorderLevel)])])} /></div></div>
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="mb-3"><div className="text-sm font-bold text-slate-900">Generate Reports</div><div className="text-xs text-slate-500">Download structured reports for inventory and business monitoring</div></div><div className="grid gap-3 md:grid-cols-2"><ReportDownload title="Monthly Inventory Report" format="CSV" description="Stock levels, reorder points, and expiration dates" onClick={exportInventory} /><ReportDownload title="Sales Transaction Log" format="CSV" description="Completed transactions and payment details" onClick={exportSales} /><ReportDownload title="Revenue Summary" format="CSV" description="Revenue totals by payment method" onClick={() => download("revenue-summary.csv", [["Payment method", "Revenue"], ...revenueByPayment.map((entry) => [entry.name, String(entry.value)])])} /><ReportDownload title="Low Stock Alert Report" format="CSV" description="Items below their configured reorder level" onClick={() => download("low-stock-report.csv", [["Medicine", "Current stock", "Reorder level"], ...state.medicines.filter((medicine) => medicine.quantity <= medicine.reorderLevel).map((medicine) => [medicine.brandName, String(medicine.quantity), String(medicine.reorderLevel)])])} /></div></div>
     </div>
   );
 }
