@@ -239,9 +239,9 @@ function SystemShell({
   return (
     <div className="app-shell flex h-screen bg-white text-slate-800">
       <aside className={`fixed inset-y-0 left-0 z-40 w-64 border-r border-slate-200 bg-white shadow-sm transition-transform duration-200 md:relative md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
-        <div className="flex h-28 items-center justify-center border-b border-slate-100 px-4 py-3">
+        <div className="flex h-24 items-center justify-center border-b border-slate-100 px-4 py-2">
           <div className="flex items-center justify-center">
-            <BrandMark className="h-24 w-48" />
+            <BrandMark className="h-20 w-40" />
           </div>
         </div>
 
