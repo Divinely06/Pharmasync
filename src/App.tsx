@@ -624,30 +624,19 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   if (receipt) {
     return (
       <div className="flex min-h-full items-center justify-center bg-slate-50 p-6">
-        <div className="receipt-print w-full max-w-md rounded-3xl border border-slate-200 bg-white shadow-xl" data-format={receiptFormat}>
-          <div className="rounded-t-3xl bg-teal-600 px-6 py-6 text-center text-white">
-            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-white/20 text-xl">✓</div>
+        <div className="receipt-print receipt-enter w-full max-w-md rounded-3xl border border-slate-200 bg-white shadow-xl" data-format={receiptFormat}>
+          <div className="rounded-t-3xl bg-teal-600 px-6 py-5 text-center text-white">
+            <div className="mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-white/20 text-xl">✓</div>
             <div className="text-lg font-bold">Sale completed</div>
-            <div className="text-xs text-teal-100">{receipt.id}</div>
-            {receipt.simulated && <div className="mt-2 inline-flex rounded-full bg-white/15 px-2.5 py-1 text-xs font-bold">SIMULATED PAYMENT · {receipt.paymentMethod}</div>}
+            <div className="text-xs text-teal-100">Your receipt is ready to print</div>
           </div>
-          <div className="space-y-3 p-5">
-            {receipt.items.map((item) => (
-              <div key={item.medicineId} className="text-sm">
-                <div className="flex items-center justify-between gap-3"><span className="text-slate-600">{item.medicineName} × {item.quantity}</span><span className="font-semibold text-slate-800">{fmt(item.subtotal)}</span></div>
-                {item.batches.length > 0 && <div className="mt-1 text-[10px] text-slate-500">{item.batches.map((batch) => `${batch.batchNumber} (${batch.quantity})`).join(", ")}</div>}
-              </div>
-            ))}
-            <div className="rounded-xl bg-slate-50 p-3 text-sm">
-              <div className="flex justify-between text-slate-600"><span>Subtotal</span><span>{fmt(receipt.subtotal)}</span></div>
-              <div className="flex justify-between text-slate-600"><span>Discount</span><span>-{fmt(receipt.discount)}</span></div>
-              <div className="flex justify-between text-slate-600"><span>Tax</span><span>{fmt(receipt.tax)}</span></div>
-              <div className="flex justify-between font-bold text-slate-900"><span>Total</span><span>{fmt(receipt.totalAmount)}</span></div>
-              <div className="mt-2 border-t border-slate-200 pt-2 text-xs text-slate-600">Payment: {receipt.paymentMethod} · {receipt.paymentStatus}</div>
-              {receipt.provider && <div className="text-xs text-slate-600">Provider: {receipt.provider}</div>}
-              {receipt.providerReference && <div className="break-all text-xs text-slate-600">Reference: {receipt.providerReference}</div>}
-              {receipt.paymentMethod === "Cash" && <><div className="flex justify-between text-xs text-slate-600"><span>Tendered</span><span>{fmt(receipt.amountReceived)}</span></div><div className="flex justify-between text-xs text-slate-600"><span>Change</span><span>{fmt(receipt.changeAmount)}</span></div></>}
-            </div>
+          <div className="space-y-4 p-5">
+            <div className="text-center text-sm text-slate-700"><div className="font-extrabold tracking-wide">ABC PHARMACY</div><div>123 Main Street</div><div>Quezon City</div><div>Tel: 0912-345-6789</div></div>
+            <div className="border-y border-dashed border-slate-300 py-3 text-xs text-slate-600"><div className="flex justify-between"><span>Receipt No.:</span><span>{receipt.id}</span></div><div className="flex justify-between"><span>Date:</span><span>{new Date(receipt.transactionDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span></div><div className="flex justify-between"><span>Cashier:</span><span>{receipt.cashierName}</span></div></div>
+            <div className="text-xs text-slate-700"><div className="mb-2 grid grid-cols-[1fr_auto_auto] gap-3 border-b border-slate-300 pb-2 font-bold"><span>Product</span><span>Qty</span><span>Price</span></div>{receipt.items.map((item) => <div key={item.medicineId} className="grid grid-cols-[1fr_auto_auto] gap-3 py-1"><span>{item.medicineName}</span><span>{item.quantity}</span><span>{fmt(item.subtotal)}</span></div>)}</div>
+            <div className="border-y border-dashed border-slate-300 py-3 text-sm"><div className="flex justify-between text-slate-600"><span>Subtotal</span><span>{fmt(receipt.subtotal)}</span></div><div className="flex justify-between text-slate-600"><span>Discount</span><span>{fmt(receipt.discount)}</span></div><div className="flex justify-between text-slate-600"><span>VAT</span><span>{fmt(receipt.tax)}</span></div><div className="mt-1 flex justify-between text-base font-extrabold text-slate-900"><span>TOTAL</span><span>{fmt(receipt.totalAmount)}</span></div></div>
+            <div className="space-y-1 text-sm text-slate-600"><div>Payment: {receipt.paymentMethod}</div>{receipt.paymentMethod === "Cash" && <><div className="flex justify-between"><span>Cash Received:</span><span>{fmt(receipt.amountReceived)}</span></div><div className="flex justify-between"><span>Change:</span><span>{fmt(receipt.changeAmount)}</span></div></>}</div>
+            <div className="text-center text-sm font-semibold text-slate-700">Thank you for shopping!</div>
             <div className="receipt-controls flex flex-wrap justify-between gap-2">
               <div className="inline-flex rounded-lg border border-slate-200 p-1"><button aria-pressed={receiptFormat === "thermal"} onClick={() => setReceiptFormat("thermal")} className={`rounded px-2 py-1 text-xs ${receiptFormat === "thermal" ? "bg-teal-700 text-white" : "text-slate-600"}`}>Thermal</button><button aria-pressed={receiptFormat === "standard"} onClick={() => setReceiptFormat("standard")} className={`rounded px-2 py-1 text-xs ${receiptFormat === "standard" ? "bg-teal-700 text-white" : "text-slate-600"}`}>Standard</button></div>
               <button onClick={() => window.print()} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700">Print receipt</button>
@@ -834,18 +823,30 @@ function InventoryPage({ state, onRefresh, lowStockOnly, onClearLowStock }: { st
   const performSave = async () => {
 
     try {
+      setOperationError("");
       await api.saveMedicine(modal?.mode === "Edit" ? modal.item?.id : undefined, {
-        ...draft,
+        barcode: draft.barcode,
+        genericName: draft.genericName,
+        brandName: draft.brandName,
+        medicineType: draft.medicineType,
+        dosageForm: draft.dosageForm,
+        strength: draft.strength,
+        prescriptionRequired: Boolean(draft.prescriptionRequired),
+        description: draft.description ?? "",
+        dosageInformation: draft.dosageInformation ?? "",
+        precautions: draft.precautions ?? "",
+        contraindications: draft.contraindications ?? "",
+        storageInformation: draft.storageInformation ?? "",
         supplierId: draft.supplierId || null,
         unitPrice: Number(draft.unitPrice ?? 0),
-        quantity: Number(draft.quantity ?? 0),
         reorderLevel: Number(draft.reorderLevel ?? 10),
+        ...(modal?.mode === "Add" ? { quantity: Number(draft.quantity ?? 0), expirationDate: draft.expirationDate, batchNumber: draft.batchNumber } : {}),
       });
       await onRefresh();
       setModal(null);
       setDraft({});
     } catch (error) {
-      window.alert(errorMessage(error));
+      setOperationError(error instanceof ApiError ? `${errorMessage(error)} (${error.status}${error.code ? ` · ${error.code}` : ""})` : errorMessage(error));
     }
   };
 
@@ -891,13 +892,17 @@ function InventoryPage({ state, onRefresh, lowStockOnly, onClearLowStock }: { st
 
   const performDelete = async (itemId: string) => {
     try { await api.archiveMedicine(itemId); await onRefresh(); }
-    catch (error) { window.alert(errorMessage(error)); }
+    catch (error) { setOperationError(error instanceof ApiError ? `${errorMessage(error)} (${error.status}${error.code ? ` · ${error.code}` : ""})` : errorMessage(error)); }
   };
 
   const viewReference = async (id: string) => {
     setReferenceLoading(true);
     setOperationError("");
-    try { setReferenceMedicine(await api.medicineDetail(id)); }
+    try {
+      const medicine = state.medicines.find((item) => item.id === id);
+      if (!medicine) throw new Error("Medicine not found in the current inventory.");
+      setReferenceMedicine({ ...medicine, batches: state.medicineBatches.filter((batch) => batch.medicineId === id), notice: "Medicine details are reference information only, not medical advice. Follow the product label and a licensed professional's guidance." });
+    }
     catch (error) { setOperationError(errorMessage(error)); }
     finally { setReferenceLoading(false); }
   };
@@ -961,6 +966,7 @@ function InventoryPage({ state, onRefresh, lowStockOnly, onClearLowStock }: { st
           </table>
         </div>
       </div>
+      {operationError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{operationError}</div>}
 
       <div className="grid gap-4 xl:grid-cols-2">
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1290,6 +1296,7 @@ function AuditPage() {
 function BackupsPage() {
   const [backups, setBackups] = useState<import("./api").BackupRecord[]>([]);
   const [archivedMedicines, setArchivedMedicines] = useState<Medicine[]>([]);
+  const [changes, setChanges] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
@@ -1298,7 +1305,7 @@ function BackupsPage() {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    void Promise.all([api.backups(), api.archivedMedicines()]).then(([backupResult, archivedResult]) => { if (active) { setBackups(backupResult.backups); setArchivedMedicines(archivedResult.medicines); } }).catch((reason) => { if (active) setError(errorMessage(reason)); }).finally(() => { if (active) setLoading(false); });
+    void Promise.all([api.backups(), api.archivedMedicines(), api.backupChanges()]).then(([backupResult, archivedResult, changeResult]) => { if (active) { setBackups(backupResult.backups); setArchivedMedicines(archivedResult.medicines); setChanges(changeResult.logs); } }).catch((reason) => { if (active) setError(errorMessage(reason)); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [reloadKey]);
 
@@ -1329,6 +1336,10 @@ function BackupsPage() {
       <section className="border-t border-slate-100 p-4">
         <div className="mb-3"><h3 className="text-sm font-bold text-slate-900">Deleted medicines</h3><p className="mt-1 text-xs text-slate-500">Archived medicines can be recovered here.</p></div>
         {archivedMedicines.length === 0 ? <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No deleted medicines.</div> : <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="min-w-full text-left text-xs"><thead className="bg-slate-50 text-slate-600"><tr><th className="px-3 py-2">Medicine</th><th className="px-3 py-2">Barcode</th><th className="px-3 py-2">Stock</th><th className="px-3 py-2">Deleted/updated</th><th className="px-3 py-2" /></tr></thead><tbody className="divide-y divide-slate-100">{archivedMedicines.map((medicine) => <tr key={medicine.id}><td className="px-3 py-2"><div className="font-semibold text-slate-800">{medicine.brandName}</div><div className="text-slate-500">{medicine.genericName}</div></td><td className="px-3 py-2 text-slate-600">{medicine.barcode}</td><td className="px-3 py-2 text-slate-600">{medicine.quantity}</td><td className="px-3 py-2 text-slate-500">{new Date(medicine.updatedAt).toLocaleString()}</td><td className="px-3 py-2 text-right"><button onClick={() => void restoreMedicine(medicine)} className="font-semibold text-teal-700">Restore</button></td></tr>)}</tbody></table></div>}
+      </section>
+      <section className="border-t border-slate-100 p-4">
+        <div className="mb-3"><h3 className="text-sm font-bold text-slate-900">All record changes</h3><p className="mt-1 text-xs text-slate-500">Created, edited, deleted, restored, and account changes.</p></div>
+        {changes.length === 0 ? <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No record changes yet.</div> : <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="min-w-full text-left text-xs"><thead className="bg-slate-50 text-slate-600"><tr><th className="px-3 py-2">Action</th><th className="px-3 py-2">Record</th><th className="px-3 py-2">By</th><th className="px-3 py-2">When</th><th className="px-3 py-2">Details</th></tr></thead><tbody className="divide-y divide-slate-100">{changes.map((change) => <tr key={change.id}><td className="px-3 py-2 font-semibold text-slate-800">{change.action}</td><td className="px-3 py-2 text-slate-600">{change.entityName ?? change.entityId}<div className="text-[10px] text-slate-400">{change.entityType}</div></td><td className="px-3 py-2 text-slate-600">{change.actorName ?? change.actorUsername ?? "System"}</td><td className="px-3 py-2 text-slate-500">{new Date(change.timestamp).toLocaleString()}</td><td className="max-w-xs px-3 py-2"><details><summary className="cursor-pointer font-semibold text-teal-700">View</summary><pre className="mt-1 whitespace-pre-wrap break-words text-[10px] text-slate-500">{JSON.stringify(change.metadata, null, 2)}</pre></details></td></tr>)}</tbody></table></div>}
       </section>
     </section>
   );
@@ -1408,7 +1419,7 @@ function ReportsPage({ state }: { state: PharmacyState }) {
 
       <div className="grid gap-5 xl:grid-cols-[1.55fr_1fr]">
         <ReportPanel title="Monthly Revenue" subtitle="Revenue by transaction month">
-          <ResponsiveContainer width="100%" height={240}><BarChart data={monthlyRevenue}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} /><XAxis dataKey="month" tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(value) => `₱${Number(value) / 1000}k`} /><Tooltip formatter={(value) => fmt(Number(value ?? 0))} /><Bar dataKey="revenue" radius={[5, 5, 0, 0]} fill="#0f8587" /></BarChart></ResponsiveContainer>
+          <ResponsiveContainer width="100%" height={240}><BarChart data={monthlyRevenue}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} /><XAxis dataKey="month" tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(value) => fmt(Number(value ?? 0))} /><Tooltip formatter={(value) => fmt(Number(value ?? 0))} /><Bar dataKey="revenue" radius={[5, 5, 0, 0]} fill="#0f8587" /></BarChart></ResponsiveContainer>
         </ReportPanel>
         <ReportPanel title="Sales by Category" subtitle="Dispensed units by medicine type">
           <ResponsiveContainer width="100%" height={240}><PieChart><Pie data={byCategory} dataKey="value" nameKey="name" innerRadius={58} outerRadius={86} paddingAngle={3}>{byCategory.map((entry, index) => <Cell key={entry.name} fill={PIE_COLORS[index % PIE_COLORS.length]} />)}</Pie><Tooltip /><Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} /></PieChart></ResponsiveContainer>

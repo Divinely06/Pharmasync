@@ -157,22 +157,20 @@ select:focus-visible {
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 12px 30px rgba(15, 23, 42, 0.045);
 }
 
+@keyframes receipt-rise {
+  from { opacity: 0; transform: translateY(28px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.receipt-enter {
+  animation: receipt-rise 420ms ease-out both;
+}
+
 * {
   scrollbar-width: none;
 }
 *::-webkit-scrollbar {
   display: none;
-}
-
-.overflow-auto:hover,
-.overflow-y-auto:hover,
-.overflow-x-auto:hover {
-  scrollbar-width: thin;
-  scrollbar-color: #e2e8f0 transparent;
-}
-
-.dashboard-scroll:hover {
-  scrollbar-width: none;
 }
 
 @media print {

@@ -71,6 +71,7 @@ export const api = {
     return response.blob();
   },
   backups: (page = 1, pageSize = 25) => request<{ backups: BackupRecord[]; page: number; pageSize: number; total: number; totalPages: number }>(`/backups?${new URLSearchParams({ page: String(page), pageSize: String(pageSize) })}`),
+  backupChanges: () => request<{ logs: AuditLog[] }>("/backups/changes"),
   archivedMedicines: () => request<{ medicines: Medicine[] }>("/medicines/archived"),
   restoreMedicine: (id: string) => request<{ id: string }>(`/medicines/${encodeURIComponent(id)}/restore`, { method: "POST" }),
   createBackup: () => request<{ id: string; status: string; fileName: string; fileSizeBytes: number }>("/backups", { method: "POST" }),

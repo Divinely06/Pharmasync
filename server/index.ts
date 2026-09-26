@@ -28,8 +28,7 @@ const logError = (event: string, error: unknown) => {
     .replace(/(password|token|secret|api[_-]?key)=([^&\s]+)/gi, "$1=[REDACTED]");
   console.error(JSON.stringify({ level: "error", event, message: redactedMessage, code: (error as { code?: string })?.code ?? null, timestamp: new Date().toISOString() }));
 };
-app.use(helmet());
-app.use((_req, res, next) => { res.setHeader("Cache-Control", "no-store"); next(); });
+
 app.use(express.json({ limit: "64kb" }));
 app.use((req, res, next) => {
   const origin = req.header("Origin");
@@ -705,6 +704,11 @@ app.get("/api/backups", auth, allow("ADMIN"), async (req, res) => {
     pool.query('SELECT b.id,b.requested_at AS "requestedAt",b.completed_at AS "completedAt",b.status,b.file_name AS "fileName",b.file_format AS "fileFormat",b.file_size_bytes AS "fileSizeBytes",b.error_message AS "errorMessage",u.full_name AS "requestedBy" FROM backup_history b LEFT JOIN users u ON u.id=b.requested_by ORDER BY b.requested_at DESC LIMIT $1 OFFSET $2', [pageSize,(page-1)*pageSize]),
   ]);
   res.json({ backups: results.rows, page, pageSize, total: count.rows[0].total, totalPages: Math.ceil(count.rows[0].total/pageSize) });
+});
+
+app.get("/api/backups/changes", auth, allow("ADMIN"), async (_req, res) => {
+  const result = await pool.query(`SELECT l.id,l.user_id AS "userId",u.full_name AS "actorName",u.username AS "actorUsername",l.action,l.entity_type AS "entityType",l.entity_id AS "entityId",CASE WHEN l.entity_type='MEDICINE' THEN (SELECT brand_name FROM medicines WHERE id=l.entity_id) WHEN l.entity_type='SUPPLIER' THEN (SELECT supplier_name FROM suppliers WHERE id=l.entity_id) WHEN l.entity_type='USER' THEN (SELECT full_name FROM users WHERE id=l.entity_id) ELSE l.entity_id END AS "entityName",l.occurred_at AS timestamp,l.metadata,l.success FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id WHERE l.action NOT IN ('LOGIN','LOGOUT','LOGIN_FAILED','AUTHORIZATION_FAILED','BACKUP_REQUESTED','BACKUP_COMPLETED','BACKUP_FAILED','DOWNLOAD_BACKUP') ORDER BY l.occurred_at DESC LIMIT 500`);
+  res.json({ logs: result.rows });
 });
 
 app.get("/api/backups/:id/download", auth, allow("ADMIN"), async (req: AuthRequest, res) => {
