@@ -157,15 +157,80 @@ export type PharmacyState = {
 
 export const CATEGORIES = [
   "All",
-  "Antibiotics",
-  "Analgesics",
-  "Cardiovascular",
-  "Diabetes",
+  "Antacid/GI",
+  "Anti-inflammatory/Steroid",
+  "Antibiotic",
+  "Antibiotic/Anti-TB",
+  "Antibiotic/Antiparasitic",
+  "Antibiotic/Topical",
+  "Antidiabetic",
+  "Antidiarrheal/GI",
+  "Antifungal",
   "Antihistamine",
-  "Antacids",
-  "Vitamins",
+  "Antihistamine/Antiemetic",
+  "Antiparasitic",
+  "Antiseptic",
+  "Antispasmodic/GI",
+  "Antiviral",
+  "Cardiovascular",
+  "Cardiovascular/Antiplatelet",
+  "Cardiovascular/Diuretic",
+  "Cardiovascular/Lipid",
+  "Cold/Flu",
+  "Cold/Flu/Decongestant",
+  "Contraceptive/Hormonal",
+  "Diagnostic",
+  "ENT/Nasal",
+  "ENT/Vertigo",
+  "Electrolyte/Supplement",
+  "First Aid",
+  "First Aid/Medical Supply",
+  "Gout/Uric Acid",
+  "Hematologic",
+  "Hepatoprotective",
+  "Herbal/Respiratory",
+  "Herbal/Supplement",
+  "Herbal/Topical",
+  "Herbal/Urology",
+  "Laxative/GI",
+  "Medical Device",
+  "Medical Supply",
+  "Musculoskeletal",
+  "Neurological",
+  "Neurological/Anticonvulsant",
+  "Neurological/Pain",
+  "Nutritional/Milk",
+  "Ophthalmic",
+  "Ophthalmic/Antibiotic",
+  "Oral Care",
+  "Oral Care/Analgesic",
+  "Oral Care/Anti-infective",
+  "Oral Care/Anti-inflammatory",
+  "Oral Care/Antiseptic",
+  "Oral Care/Respiratory",
+  "Pain Relief/Analgesic",
+  "Pain Relief/Anti-inflammatory",
+  "Personal Care/Hygiene",
+  "Personal Care/Hygiene/Antiparasitic",
+  "Probiotic/GI",
+  "Renal/Supplement",
   "Respiratory",
-  "Dermatology",
+  "Respiratory/Allergy",
+  "Respiratory/Bronchodilator",
+  "Respiratory/Cough",
+  "Respiratory/Decongestant",
+  "Respiratory/Mucolytic",
+  "Sleep Aid/Supplement",
+  "Thyroid",
+  "Topical/Analgesic",
+  "Topical/Antibiotic",
+  "Topical/Skin",
+  "Topical/Skin/Antifungal",
+  "Urology",
+  "Urology/Cardiovascular",
+  "Urology/Hair",
+  "Urology/Supplement",
+  "Vitamins/Supplements",
 ] as const;
 
 export const ROLE_ACCESS: Record<UserRole, AccessArea[]> = {
@@ -186,26 +251,28 @@ export const ROLE_ACCESS: Record<UserRole, AccessArea[]> = {
 export const canAccess = (role: UserRole, area: AccessArea) =>
   ROLE_ACCESS[role]?.includes(area) ?? false;
 
-const medicineCategoryValues: Record<string, string[]> = {
-  Antibiotics: ["Antibiotic", "Antibiotics"],
-  Analgesics: ["Analgesic", "Analgesics"],
-  Cardiovascular: ["Cardiovascular"],
-  Diabetes: ["Diabetes"],
-  Antihistamine: ["Antihistamine", "Antihistamines"],
-  Antacids: ["Antacid", "Antacids"],
-  Vitamins: ["Vitamin", "Vitamins"],
-  Respiratory: ["Respiratory"],
-  Dermatology: ["Dermatology"],
-};
+const normalizeCategoryTokens = (value: string) =>
+  value
+    .toLowerCase()
+    .split(/[\/\+]/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => part.replace(/s\b/g, "").replace(/[^a-z0-9]/g, ""))
+    .filter(Boolean);
 
 export const matchesMedicineCategory = (medicineType: string, category: string) => {
   if (category === "All") return true;
-  const normalizedMedicineType = medicineType.toLowerCase();
-  const aliases = (medicineCategoryValues[category] ?? [category]).map((value) => value.toLowerCase());
-  return aliases.some((alias) => {
-    const aliasVariants = alias.split(/[\/\+]/).map((part) => part.trim()).filter(Boolean);
-    return aliasVariants.some((variant) => normalizedMedicineType.includes(variant)) || normalizedMedicineType.includes(alias);
-  });
+
+  const itemTokens = normalizeCategoryTokens(medicineType);
+  const categoryTokens = normalizeCategoryTokens(category);
+
+  if (!itemTokens.length || !categoryTokens.length) return false;
+
+  if (categoryTokens.length === 1) {
+    return itemTokens.includes(categoryTokens[0]) || itemTokens.some((token) => token.includes(categoryTokens[0]));
+  }
+
+  return categoryTokens.every((token) => itemTokens.includes(token));
 };
 
 export const getVisibleCategoryFilters = <T extends { medicineType: string; quantity: number; expirationDate: string }>(items: ReadonlyArray<T>, isVisible: (item: T) => boolean) => {

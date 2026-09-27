@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AccessArea,
   AuditLog,
+  CATEGORIES,
   Medicine,
   PharmacyState,
   PharmacyUser,
@@ -845,6 +846,7 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<{ mode: "Add" | "Edit"; item?: Medicine } | null>(null);
   const [draft, setDraft] = useState<Partial<Medicine>>({});
+  const categoryOptions = CATEGORIES.filter((category) => category !== "All");
   const [purchaseDraft, setPurchaseDraft] = useState({ supplierId: state.suppliers[0]?.id ?? "", medicineId: state.medicines[0]?.id ?? "", quantity: "1", unitCost: "0", batchNumber: "", expirationDate: "", referenceNumber: `PO-${Date.now()}` });
   const [movementDraft, setMovementDraft] = useState({ batchId: state.medicineBatches[0]?.id ?? "", movement: "ADJUSTMENT", quantity: "1", direction: "OUT" as "IN" | "OUT", notes: "" });
   const [operationError, setOperationError] = useState("");
@@ -1134,7 +1136,7 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
               <div>
                 <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Medicine type</div>
                 <select value={draft.medicineType ?? "Antibiotic"} onChange={(e) => setDraft({ ...draft, medicineType: e.target.value })} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm">
-                  {['Antibiotic', 'Analgesic', 'Cardiovascular', 'Diabetes', 'Antihistamine', 'Antacid', 'Vitamin', 'Respiratory', 'Dermatology'].map((type) => <option key={type}>{type}</option>)}
+                  {categoryOptions.map((type) => <option key={type} value={type}>{type}</option>)}
                 </select>
               </div>
               <div>

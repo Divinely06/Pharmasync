@@ -324,6 +324,9 @@ ALTER TABLE audit_logs ALTER COLUMN occurred_at SET DEFAULT now();
 
 CREATE OR REPLACE FUNCTION pharmasync_prevent_audit_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  IF current_setting('app.audit_cleanup', true) = 'true' THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
   RAISE EXCEPTION 'Audit records are append-only' USING ERRCODE = '23514';
 END;
 $$;

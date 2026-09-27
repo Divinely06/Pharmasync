@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { canAccess, buildAuditLog, calculateTotals, dateKey, getVisibleCategoryFilters, matchesMedicineCategory } from './data';
+import { CATEGORIES, canAccess, buildAuditLog, calculateTotals, dateKey, getVisibleCategoryFilters, matchesMedicineCategory } from './data';
 import { api } from './api';
 import { missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from '../server/db';
 import { isRequestOriginAllowed, loginSchema, medicineSchema, passwordChangeSchema, passwordResetSchema, saleSchema, sessionTokenSchema, userCreateSchema, validateSaleTotals } from '../server/validation';
@@ -25,14 +25,35 @@ describe('pharmacy system logic', () => {
     expect(canAccess('CASHIER', 'USERS')).toBe(false);
   });
 
-  it('matches plural POS categories to singular medicine types', () => {
-    expect(matchesMedicineCategory('Antibiotic', 'Antibiotics')).toBe(true);
-    expect(matchesMedicineCategory('Analgesic', 'Analgesics')).toBe(true);
-    expect(matchesMedicineCategory('Antacid', 'Antacids')).toBe(true);
-    expect(matchesMedicineCategory('Vitamin', 'Vitamins')).toBe(true);
+  it('matches real POS categories to medicine taxonomy values', () => {
+    expect(matchesMedicineCategory('Antibiotic', 'Antibiotic')).toBe(true);
+    expect(matchesMedicineCategory('Antihistamine/Antiemetic', 'Antihistamine')).toBe(true);
+    expect(matchesMedicineCategory('Antacid/GI', 'Antacid/GI')).toBe(true);
     expect(matchesMedicineCategory('Cardiovascular/Lipid', 'Cardiovascular')).toBe(true);
     expect(matchesMedicineCategory('Respiratory/Mucolytic', 'Respiratory')).toBe(true);
-    expect(matchesMedicineCategory('Cardiovascular', 'Antibiotics')).toBe(false);
+    expect(matchesMedicineCategory('Cardiovascular', 'Antibiotic')).toBe(false);
+    expect(matchesMedicineCategory('Respiratory/Allergy', 'Respiratory/Allergy')).toBe(true);
+    expect(matchesMedicineCategory('Vitamins/Supplements', 'Vitamins/Supplements')).toBe(true);
+  });
+
+  it('includes the full product catalog category set for POS filters', () => {
+    expect(CATEGORIES).toEqual(expect.arrayContaining([
+      'All',
+      'Antibiotic',
+      'Antibiotic/Anti-TB',
+      'Antihistamine',
+      'Antihistamine/Antiemetic',
+      'Antacid/GI',
+      'Cardiovascular',
+      'Cardiovascular/Lipid',
+      'Respiratory',
+      'Respiratory/Mucolytic',
+      'Respiratory/Allergy',
+      'Vitamins/Supplements',
+      'Urology',
+      'Topical/Skin',
+      'Medical Supply',
+    ]));
   });
 
   it('hides unavailable POS categories while keeping valid ones visible', () => {
@@ -158,6 +179,7 @@ describe('write request validation', () => {
     expect(validateSaleTotals({ subtotal: 100, discount: 110, tax: 10, amountReceived: 0, paymentMethod: 'Cash' }).valid).toBe(false);
     expect(validateSaleTotals({ subtotal: 100, discount: 10, tax: 10, amountReceived: 100, paymentMethod: 'Cash' }).valid).toBe(true);
     expect(validateSaleTotals({ subtotal: 100, discount: 10, tax: 10, amountReceived: 99, paymentMethod: 'Cash' }).valid).toBe(false);
+    expect(validateSaleTotals({ subtotal: 100, discount: 0, tax: 10, paymentMethod: 'Cash' }).valid).toBe(true);
   });
 
   it('rejects duplicate medicines in one sale request', () => {

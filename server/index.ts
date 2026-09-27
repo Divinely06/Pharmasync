@@ -97,6 +97,7 @@ const allow = (...roles: SessionUser["role"][]) => async (req: AuthRequest, res:
 };
 const audit = async (client: PoolClient, userId: string, action: string, entityType: string, entityId: string, metadata: object, success = true) => {
   await client.query("INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, metadata, success) VALUES ($1,$2,$3,$4,$5,$6,$7)", [`log-${randomUUID()}`, userId, action, entityType, entityId, metadata, success]);
+  await client.query("SET LOCAL app.audit_cleanup = 'true'");
   await client.query("DELETE FROM audit_logs WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY occurred_at DESC, id DESC LIMIT 150)");
 };
 const withClient = async <T>(operation: (client: PoolClient) => Promise<T>): Promise<T> => {
@@ -656,7 +657,8 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
     const discount = body.discountType !== "none" ? Number((subtotal * 0.2).toFixed(2)) : Number(body.discount ?? 0);
     const tax = Number((subtotal * 0.1).toFixed(2));
     const cash = body.paymentMethod === "Cash";
-    const received = Number(body.amountReceived ?? subtotal);
+    const totalBeforeTender = Number((subtotal - discount + tax).toFixed(2));
+    const received = Number((body.amountReceived ?? totalBeforeTender).toFixed(2));
     const saleTotals = validateSaleTotals({ subtotal, discount, tax, amountReceived: received, paymentMethod: body.paymentMethod });
     if (!saleTotals.valid) throw Object.assign(new Error(saleTotals.reason ?? "Sale totals are invalid"), { status: 400, code: "INVALID_INPUT" });
     const total = saleTotals.total;

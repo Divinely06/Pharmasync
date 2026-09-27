@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fmt, type Medicine } from "../data";
+import { CATEGORIES, fmt, type Medicine } from "../data";
 
 type SortKey = "brandName" | "quantity" | "unitPrice" | "expirationDate";
 
@@ -60,6 +60,7 @@ export default function Inventory({ products, setProducts }: { products: Medicin
   const [modal, setModal] = useState<"add" | "edit" | null>(null);
   const [draft, setDraft] = useState<Partial<Medicine>>(initialDraft());
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const categoryOptions = CATEGORIES.filter((category) => category !== "All");
 
   const filtered = products
     .filter((item) => {
@@ -212,7 +213,9 @@ export default function Inventory({ products, setProducts }: { products: Medicin
               </div>
               <div>
                 <label className="mb-1.5 block text-xs font-semibold text-gray-600">Category</label>
-                <input value={draft.medicineType ?? "Antibiotics"} onChange={(event) => setDraft((prev) => ({ ...prev, medicineType: event.target.value }))} className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm" />
+                <select value={draft.medicineType ?? "Antibiotic"} onChange={(event) => setDraft((prev) => ({ ...prev, medicineType: event.target.value }))} className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm">
+                  {categoryOptions.map((category) => <option key={category} value={category}>{category}</option>)}
+                </select>
               </div>
             </div>
             <div className="flex gap-3 px-6 pb-6">
