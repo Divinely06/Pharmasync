@@ -83,7 +83,7 @@ app.get("/api/health", async (_req, res) => {
   catch { res.status(503).json({ ok: false, code: "DATABASE_UNAVAILABLE", error: "Database is unavailable" }); }
 });
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false, message: { code: "RATE_LIMITED", error: "Too many login attempts. Try again later." } });
-const backupLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 1, standardHeaders: "draft-8", legacyHeaders: false, message: { code: "RATE_LIMITED", error: "A backup was already requested recently" } });
+const backupLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 1, standardHeaders: "draft-8", legacyHeaders: false, skipFailedRequests: true, message: { code: "RATE_LIMITED", error: "A backup was already requested recently" } });
 app.post("/api/login", loginLimiter, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_INPUT", error: "Username and password are required" });

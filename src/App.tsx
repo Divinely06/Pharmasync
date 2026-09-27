@@ -1404,7 +1404,17 @@ function BackupsPage({ state, onRefresh }: { state: PharmacyState; onRefresh: ()
   useEffect(() => {
     let active = true;
     setLoading(true);
-    void Promise.all([api.backups(), api.archivedMedicines(), api.backupChanges()]).then(([backupResult, archivedResult, changeResult]) => { if (active) { setBackups(backupResult.backups); setArchivedMedicines(archivedResult.medicines); setChanges(changeResult.logs); } }).catch((reason) => { if (active) setError(errorMessage(reason)); }).finally(() => { if (active) setLoading(false); });
+    void Promise.allSettled([api.backups(), api.archivedMedicines(), api.backupChanges()]).then(([backupResult, archivedResult, changeResult]) => {
+      if (!active) return;
+      const failures: string[] = [];
+      if (backupResult.status === "fulfilled") setBackups(backupResult.value.backups);
+      else failures.push(`Backup history: ${errorMessage(backupResult.reason)}`);
+      if (archivedResult.status === "fulfilled") setArchivedMedicines(archivedResult.value.medicines);
+      else failures.push(`Deleted medicines: ${errorMessage(archivedResult.reason)}`);
+      if (changeResult.status === "fulfilled") setChanges(changeResult.value.logs);
+      else failures.push(`Record changes: ${errorMessage(changeResult.reason)}`);
+      if (failures.length) setError(failures.join(" · "));
+    }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [reloadKey]);
 
