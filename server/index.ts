@@ -14,7 +14,15 @@ import { createPaymentProvider, type PaymentStatus } from "./payment-provider.js
 
 const connectionString = process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI;
 if (!connectionString) throw new Error("DATABASE_URL is required");
-const pool = new Pool({ connectionString, max: Number(process.env.DB_POOL_MAX ?? 1), ssl: connectionString.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined });
+const serverless = Boolean(process.env.VERCEL);
+const pool = new Pool({
+  connectionString,
+  max: Number(process.env.DB_POOL_MAX ?? 1),
+  idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS ?? (serverless ? 1000 : 10000)),
+  connectionTimeoutMillis: Number(process.env.DB_CONNECTION_TIMEOUT_MS ?? 5000),
+  allowExitOnIdle: serverless,
+  ssl: connectionString.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined,
+});
 const paymentProvider = createPaymentProvider();
 const app = express();
 const sessionCookie = "pharmasync_session";
@@ -779,6 +787,7 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   logError("api_request_failed", error);
   if (res.headersSent) return;
   const code = (error as { code?: string }).code;
+  if (code === "53300") return res.status(503).json({ code: "DATABASE_BUSY", error: "The database is temporarily at its connection limit. Please retry shortly." });
   if (code === "23505") return res.status(409).json({ code: "CONFLICT", error: "A record with these details already exists" });
   if (code === "23503") return res.status(400).json({ code: "INVALID_REFERENCE", error: "A referenced record does not exist" });
   const status = typeof (error as { status?: unknown }).status === "number" ? Number((error as { status: number }).status) : 500;
