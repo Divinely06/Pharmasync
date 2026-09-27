@@ -848,6 +848,7 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (res.headersSent) return;
   const code = (error as { code?: string }).code;
   if (code === "53300") return res.status(503).json({ code: "DATABASE_BUSY", error: "The database is temporarily at its connection limit. Please retry shortly." });
+  if (code === "23514") return res.status(409).json({ code: "INVALID_STATE", error: "The sale totals or stock are inconsistent. Please refresh and try again." });
   if (code === "23505") return res.status(409).json({ code: "CONFLICT", error: "A record with these details already exists" });
   if (code === "23503") return res.status(400).json({ code: "INVALID_REFERENCE", error: "A referenced record does not exist" });
   const status = typeof (error as { status?: unknown }).status === "number" ? Number((error as { status: number }).status) : 500;

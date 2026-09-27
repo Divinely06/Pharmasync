@@ -92,6 +92,7 @@ function App() {
   const [appError, setAppError] = useState("");
   const [booting, setBooting] = useState(true);
   const [inventoryFilter, setInventoryFilter] = useState<"all" | "low-stock" | "expiring-soon">("all");
+  const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -134,6 +135,8 @@ function App() {
   };
 
   const logout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
     try {
       await api.logout();
     } catch {
@@ -142,6 +145,7 @@ function App() {
       document.cookie = "pharmasync_session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax";
       setAuthUser(null);
       setState(emptyState);
+      setLoggingOut(false);
     }
   };
 
@@ -211,9 +215,12 @@ function App() {
           <button
             type="submit"
             disabled={!login.username || !login.password}
-            className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white shadow hover:bg-teal-500"
+            className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white shadow transition-all duration-150 ease-out hover:bg-teal-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-70"
           >
-            Sign in
+            <span className="inline-flex items-center justify-center gap-2">
+              <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-white/90" aria-hidden="true" />
+              Sign in
+            </span>
           </button>
           {loginError && <div role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{loginError}</div>}
           </form>
@@ -236,7 +243,7 @@ function App() {
     setInventoryFilter("expiring-soon");
     navigate("inventory");
   };
-  return <SystemShell {...{ state, page, setPage, mobileOpen, setMobileOpen, currentUser, logout, lowStockCount, todayRevenue, visibleNav, refreshData, appError, setAppError, navigate, inventoryFilter, setInventoryFilter, showLowStock, showExpiringSoon }} />;
+  return <SystemShell {...{ state, page, setPage, mobileOpen, setMobileOpen, currentUser, logout, loggingOut, lowStockCount, todayRevenue, visibleNav, refreshData, appError, setAppError, navigate, inventoryFilter, setInventoryFilter, showLowStock, showExpiringSoon }} />;
 }
 
 function SystemShell({
@@ -247,6 +254,7 @@ function SystemShell({
   setMobileOpen,
   currentUser,
   logout,
+  loggingOut,
   lowStockCount,
   todayRevenue,
   visibleNav,
@@ -266,6 +274,7 @@ function SystemShell({
   setMobileOpen: React.Dispatch<React.SetStateAction<boolean>>;
   currentUser: PharmacyUser;
   logout: () => void;
+  loggingOut: boolean;
   lowStockCount: number;
   todayRevenue: number;
   visibleNav: { id: Page; label: string; area: AccessArea; icon: React.ReactNode }[];
@@ -327,7 +336,14 @@ function SystemShell({
                 <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{currentUser.role}</div>
               </div>
             </div>
-            <button onClick={logout} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100">Logout</button>
+            <button onClick={() => void logout()} disabled={loggingOut} aria-busy={loggingOut} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition-all duration-150 ease-out hover:bg-slate-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-70">
+              {loggingOut ? (
+                <span className="inline-flex items-center gap-2">
+                  <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" aria-hidden="true" />
+                  Logging out...
+                </span>
+              ) : "Logout"}
+            </button>
           </div>
         </div>
       </aside>
@@ -805,7 +821,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
             {paymentMethod === 'Cash' && <div className="flex items-center justify-between text-sm"><span>Change</span><span>{fmt(change)}</span></div>}
           </div>
 
-          <button onClick={() => void submitSale()} disabled={submitting || cart.length === 0 || Boolean(pendingPayment)} className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50">{submitting ? "Processing..." : paymentMethod === "Cash" ? "Complete sale" : `Simulate ${paymentMethod} payment`}</button>
+          <button onClick={() => void submitSale()} disabled={submitting || cart.length === 0 || Boolean(pendingPayment)} className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white transition-all duration-150 ease-out hover:bg-teal-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50">{submitting ? <span className="inline-flex items-center justify-center gap-2"><span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />Processing...</span> : paymentMethod === "Cash" ? "Complete sale" : `Simulate ${paymentMethod} payment`}</button>
         </div>
       </div>
     </div>
