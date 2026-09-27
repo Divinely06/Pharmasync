@@ -9,6 +9,7 @@ import {
   Supplier,
   UserRole,
   canAccess,
+  dateKey,
   fmt,
 } from "./data";
 import { ApiError, api, type ReceiptData, type ReportData } from "./api";
@@ -67,11 +68,6 @@ const hydrateState = (source: PharmacyState): PharmacyState => ({
 });
 
 const errorMessage = (error: unknown) => error instanceof ApiError ? `${error.message} (${error.status}${error.code ? ` · ${error.code}` : ""})` : error instanceof Error ? error.message : "The request could not be completed.";
-const dateKey = (value: string | Date) => {
-  const raw = value instanceof Date ? value.toISOString() : value;
-  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
-  return new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value));
-};
 const today = () => dateKey(new Date());
 const daysUntil = (date: string | Date) => (Date.parse(`${dateKey(date)}T00:00:00Z`) - Date.parse(`${today()}T00:00:00Z`)) / 86400000;
 const isExpiringSoon = (date: string | Date) => daysUntil(date) > 0 && daysUntil(date) <= 90;

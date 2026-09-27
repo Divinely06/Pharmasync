@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { canAccess, buildAuditLog, calculateTotals } from './data';
+import { canAccess, buildAuditLog, calculateTotals, dateKey } from './data';
 import { api } from './api';
 import { isRequestOriginAllowed, medicineSchema, saleSchema } from '../server/validation';
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 describe('pharmacy system logic', () => {
   it('allows admin access to reports and inventory', () => {
@@ -44,6 +47,13 @@ describe('pharmacy system logic', () => {
     expect(totals.subtotal).toBe(60);
     expect(totals.tax).toBe(6);
     expect(totals.total).toBe(66);
+  });
+
+  it('keeps local calendar dates instead of shifting them to UTC', () => {
+    vi.stubEnv('TZ', 'Asia/Manila');
+
+    expect(dateKey(new Date('2026-09-26T16:00:00.000Z'))).toBe('2026-09-27');
+    expect(dateKey('2026-09-26')).toBe('2026-09-26');
   });
 
 });

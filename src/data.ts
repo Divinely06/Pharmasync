@@ -193,6 +193,17 @@ export const fmt = (n: number) =>
     maximumFractionDigits: 2,
   })
 
+export const dateKey = (value: string | Date) => {
+  if (value instanceof Date) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+  return new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value));
+};
+
 export const buildAuditLog = ({
   userId,
   action,
