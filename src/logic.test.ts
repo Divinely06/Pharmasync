@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canAccess, buildAuditLog, calculateTotals, dateKey } from './data';
 import { api } from './api';
+import { normalizeDatabaseUrl } from '../server/db';
 import { isRequestOriginAllowed, medicineSchema, saleSchema } from '../server/validation';
 
 afterEach(() => {
@@ -54,6 +55,12 @@ describe('pharmacy system logic', () => {
 
     expect(dateKey(new Date('2026-09-26T16:00:00.000Z'))).toBe('2026-09-27');
     expect(dateKey('2026-09-26')).toBe('2026-09-26');
+  });
+
+  it('adds libpq compatibility to SSL database URLs so Aiven/self-signed certs connect', () => {
+    expect(normalizeDatabaseUrl('postgres://user:pass@host:5432/app?sslmode=require')).toBe('postgres://user:pass@host:5432/app?sslmode=require&uselibpqcompat=true');
+    expect(normalizeDatabaseUrl('postgres://user:pass@host:5432/app?sslmode=require&uselibpqcompat=true')).toBe('postgres://user:pass@host:5432/app?sslmode=require&uselibpqcompat=true');
+    expect(normalizeDatabaseUrl('postgres://user:pass@host:5432/app')).toBe('postgres://user:pass@host:5432/app');
   });
 
 });

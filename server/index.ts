@@ -11,8 +11,9 @@ import { auditFilterSchema, inventoryMovementSchema, isRequestOriginAllowed, lis
 import { allocateFefo } from "./inventory.js";
 import { createLogicalBackup, dumpDatabase } from "./backup.js";
 import { createPaymentProvider, type PaymentStatus } from "./payment-provider.js";
+import { normalizeDatabaseUrl } from "./db.js";
 
-const connectionString = process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI;
+const connectionString = normalizeDatabaseUrl(process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI ?? "");
 if (!connectionString) throw new Error("DATABASE_URL is required");
 const serverless = Boolean(process.env.VERCEL);
 function createPool() {

@@ -3,14 +3,15 @@ import { readFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { Pool } from "pg";
 import { logicalTables } from "./backup.js";
+import { normalizeDatabaseUrl } from "./db.js";
 
 type LogicalBackup = { format: string; schemaVersion: number; tables: Record<string, unknown[]> };
 const filePath = process.argv[2];
-const targetConnectionString = process.env.RESTORE_DATABASE_URL;
+const targetConnectionString = normalizeDatabaseUrl(process.env.RESTORE_DATABASE_URL ?? "");
 if (!filePath || !targetConnectionString) throw new Error("Usage: RESTORE_DATABASE_URL=<disposable test database> pnpm db:restore -- <backup.json.gz>");
 
 const targetUrl = new URL(targetConnectionString);
-const sourceConnectionString = process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI;
+const sourceConnectionString = normalizeDatabaseUrl(process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI ?? "");
 const sourceUrl = sourceConnectionString ? new URL(sourceConnectionString) : null;
 const targetDatabase = decodeURIComponent(targetUrl.pathname.replace(/^\//, ""));
 if (!/(test|restore|disposable)/i.test(targetDatabase)) throw new Error("Refusing restore: target database name must include test, restore, or disposable");

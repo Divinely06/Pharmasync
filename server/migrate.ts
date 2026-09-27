@@ -1,8 +1,9 @@
 import "dotenv/config";
 import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
+import { normalizeDatabaseUrl } from "./db.js";
 
-const connectionString = process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI;
+const connectionString = normalizeDatabaseUrl(process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI ?? "");
 if (!connectionString) throw new Error("DATABASE_URL is required");
 const pool = new Pool({ connectionString, max: Number(process.env.DB_POOL_MAX ?? 1), ssl: connectionString.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined });
 const client = await pool.connect();
