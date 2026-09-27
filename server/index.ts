@@ -633,7 +633,7 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
     const received = Number(body.amountReceived ?? total);
     if (!Number.isFinite(received) || received < 0 || (cash && received < total)) throw Object.assign(new Error("Cash amount must cover the total"), { status: 400, code: "CASH_SHORTFALL" });
     const saleId = `TXN-${randomUUID()}`;
-    await client.query("INSERT INTO sales (id,cashier_id,subtotal,discount,tax,total_amount,payment_method,amount_received,change_amount,status,idempotency_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'PENDING',$10)", [saleId,req.user!.id,subtotal,discount,tax,total,body.paymentMethod,cash ? received : total,cash ? received-total : 0,body.idempotencyKey]);
+    await client.query("INSERT INTO sales (id,cashier_id,transaction_date,subtotal,discount,tax,total_amount,payment_method,amount_received,change_amount,status,idempotency_key) VALUES ($1,$2,now(),$3,$4,$5,$6,$7,$8,$9,'PENDING',$10)", [saleId,req.user!.id,subtotal,discount,tax,total,body.paymentMethod,cash ? received : total,cash ? received-total : 0,body.idempotencyKey]);
     for (const line of lines) {
       const itemResult = await client.query("INSERT INTO sale_items (id,sale_id,medicine_id,quantity,unit_price,subtotal) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id", [`sale-item-${randomUUID()}`,saleId,line.id,line.quantity,line.unitPrice,line.subtotal]);
       line.saleItemId = itemResult.rows[0].id;
@@ -656,7 +656,7 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
           await client.query("INSERT INTO sale_item_batches (sale_item_id,batch_id,quantity) VALUES ($1,$2,$3)", [line.saleItemId,allocation.batchId,allocation.quantity]);
         }
         const stock = await client.query("UPDATE medicines SET quantity=quantity-$1,updated_at=now() WHERE id=$2 RETURNING quantity", [line.quantity,line.id]);
-        await client.query("INSERT INTO inventory_transactions (id,medicine_id,transaction_type,quantity,previous_quantity,resulting_quantity,reference_id,performed_by,notes) VALUES ($1,$2,'SALE',$3,$4,$5,$6,$7,$8)", [`inv-${randomUUID()}`,line.id,line.quantity,stock.rows[0].quantity+line.quantity,stock.rows[0].quantity,saleId,req.user!.id,`POS sale ${saleId}`]);
+        await client.query("INSERT INTO inventory_transactions (id,medicine_id,transaction_type,quantity,previous_quantity,resulting_quantity,reference_id,performed_by,occurred_at,notes) VALUES ($1,$2,'SALE',$3,$4,$5,$6,$7,now(),$8)", [`inv-${randomUUID()}`,line.id,line.quantity,stock.rows[0].quantity+line.quantity,stock.rows[0].quantity,saleId,req.user!.id,`POS sale ${saleId}`]);
       }
       await audit(client,req.user!.id,"SALE_COMPLETED","SALE",saleId,{ total,paymentMethod:body.paymentMethod, discountType:body.discountType, discountId:body.discountId || null, simulated:!cash });
       if (!cash) await audit(client,req.user!.id,"PAYMENT_PAID","PAYMENT",paymentId!,{ provider:"DUMMY",saleId });
