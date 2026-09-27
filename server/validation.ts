@@ -92,6 +92,24 @@ export const saleSchema = z.object({
   idempotencyKey: requiredText(100),
 });
 
+export const validateSaleTotals = ({ subtotal, discount, tax, amountReceived, paymentMethod }: { subtotal: number; discount: number; tax: number; amountReceived?: number; paymentMethod: "Cash" | "GCash" | "Maya" | "Card" }) => {
+  const normalizedSubtotal = Number(Number(subtotal).toFixed(2));
+  const normalizedDiscount = Number(Number(discount).toFixed(2));
+  const normalizedTax = Number(Number(tax).toFixed(2));
+  const total = Number((normalizedSubtotal - normalizedDiscount + normalizedTax).toFixed(2));
+
+  if (!Number.isFinite(normalizedSubtotal) || normalizedSubtotal < 0) return { valid: false as const, reason: "Subtotal is invalid" };
+  if (!Number.isFinite(normalizedDiscount) || normalizedDiscount < 0) return { valid: false as const, reason: "Discount is invalid" };
+  if (!Number.isFinite(normalizedTax) || normalizedTax < 0) return { valid: false as const, reason: "Tax is invalid" };
+  if (normalizedDiscount > normalizedSubtotal) return { valid: false as const, reason: "Discount cannot exceed subtotal" };
+  if (paymentMethod === "Cash") {
+    const tendered = Number(amountReceived ?? total);
+    if (!Number.isFinite(tendered) || tendered < 0 || tendered < total) return { valid: false as const, reason: "Cash amount must cover the total" };
+  }
+
+  return { valid: true as const, subtotal: normalizedSubtotal, discount: normalizedDiscount, tax: normalizedTax, total };
+};
+
 export const purchaseSchema = z.object({
   supplierId: requiredText(100),
   referenceNumber: requiredText(100),

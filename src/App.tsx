@@ -136,10 +136,12 @@ function App() {
   const logout = async () => {
     try {
       await api.logout();
+    } catch {
+      // The client session should still be cleared even if the server rejects the logout request.
+    } finally {
+      document.cookie = "pharmasync_session=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax";
       setAuthUser(null);
       setState(emptyState);
-    } catch (error) {
-      setAppError(errorMessage(error));
     }
   };
 

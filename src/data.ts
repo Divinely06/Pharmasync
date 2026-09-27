@@ -198,8 +198,15 @@ const medicineCategoryValues: Record<string, string[]> = {
   Dermatology: ["Dermatology"],
 };
 
-export const matchesMedicineCategory = (medicineType: string, category: string) =>
-  category === "All" || (medicineCategoryValues[category] ?? [category]).includes(medicineType);
+export const matchesMedicineCategory = (medicineType: string, category: string) => {
+  if (category === "All") return true;
+  const normalizedMedicineType = medicineType.toLowerCase();
+  const aliases = (medicineCategoryValues[category] ?? [category]).map((value) => value.toLowerCase());
+  return aliases.some((alias) => {
+    const aliasVariants = alias.split(/[\/\+]/).map((part) => part.trim()).filter(Boolean);
+    return aliasVariants.some((variant) => normalizedMedicineType.includes(variant)) || normalizedMedicineType.includes(alias);
+  });
+};
 
 export const getVisibleCategoryFilters = <T extends { medicineType: string; quantity: number; expirationDate: string }>(items: ReadonlyArray<T>, isVisible: (item: T) => boolean) => {
   const available = new Set<string>();

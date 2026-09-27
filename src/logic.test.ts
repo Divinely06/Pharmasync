@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canAccess, buildAuditLog, calculateTotals, dateKey, getVisibleCategoryFilters, matchesMedicineCategory } from './data';
 import { api } from './api';
 import { missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from '../server/db';
-import { isRequestOriginAllowed, loginSchema, medicineSchema, passwordChangeSchema, passwordResetSchema, saleSchema, sessionTokenSchema, userCreateSchema } from '../server/validation';
+import { isRequestOriginAllowed, loginSchema, medicineSchema, passwordChangeSchema, passwordResetSchema, saleSchema, sessionTokenSchema, userCreateSchema, validateSaleTotals } from '../server/validation';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -30,6 +30,8 @@ describe('pharmacy system logic', () => {
     expect(matchesMedicineCategory('Analgesic', 'Analgesics')).toBe(true);
     expect(matchesMedicineCategory('Antacid', 'Antacids')).toBe(true);
     expect(matchesMedicineCategory('Vitamin', 'Vitamins')).toBe(true);
+    expect(matchesMedicineCategory('Cardiovascular/Lipid', 'Cardiovascular')).toBe(true);
+    expect(matchesMedicineCategory('Respiratory/Mucolytic', 'Respiratory')).toBe(true);
     expect(matchesMedicineCategory('Cardiovascular', 'Antibiotics')).toBe(false);
   });
 
@@ -150,6 +152,12 @@ describe('write request validation', () => {
   it('rejects non-positive sale quantities and missing idempotency keys', () => {
     expect(saleSchema.safeParse({ items: [{ medicineId: 'med-1', quantity: 0 }], paymentMethod: 'Cash' }).success).toBe(false);
     expect(saleSchema.safeParse({ items: [{ medicineId: 'med-1', quantity: 1 }], paymentMethod: 'Cash' }).success).toBe(false);
+  });
+
+  it('rejects impossible cash totals before a sale reaches the database', () => {
+    expect(validateSaleTotals({ subtotal: 100, discount: 110, tax: 10, amountReceived: 0, paymentMethod: 'Cash' }).valid).toBe(false);
+    expect(validateSaleTotals({ subtotal: 100, discount: 10, tax: 10, amountReceived: 100, paymentMethod: 'Cash' }).valid).toBe(true);
+    expect(validateSaleTotals({ subtotal: 100, discount: 10, tax: 10, amountReceived: 99, paymentMethod: 'Cash' }).valid).toBe(false);
   });
 
   it('rejects duplicate medicines in one sale request', () => {

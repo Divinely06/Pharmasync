@@ -7,7 +7,7 @@ import { Pool, type PoolClient } from "pg";
 import bcrypt from "bcryptjs";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
-import { auditFilterSchema, inventoryMovementSchema, isRequestOriginAllowed, listFilterSchema, loginSchema, medicineSchema, medicineUpdateSchema, passwordChangeSchema, passwordResetSchema, purchaseSchema, reportFilterSchema, saleSchema, sessionTokenSchema, supplierSchema, userCreateSchema, userUpdateSchema } from "./validation.js";
+import { auditFilterSchema, inventoryMovementSchema, isRequestOriginAllowed, listFilterSchema, loginSchema, medicineSchema, medicineUpdateSchema, passwordChangeSchema, passwordResetSchema, purchaseSchema, reportFilterSchema, saleSchema, sessionTokenSchema, supplierSchema, userCreateSchema, userUpdateSchema, validateSaleTotals } from "./validation.js";
 import { allocateFefo } from "./inventory.js";
 import { createLogicalBackup, dumpDatabase } from "./backup.js";
 import { createPaymentProvider, type PaymentStatus } from "./payment-provider.js";
@@ -654,12 +654,12 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
     const subtotal = Number(lines.reduce((sum, line) => sum + line.subtotal, 0).toFixed(2));
     if (body.discountType !== "none" && !body.discountId.trim()) throw Object.assign(new Error("A valid PWD or senior citizen ID is required for this discount"), { status: 400, code: "DISCOUNT_ID_REQUIRED" });
     const discount = body.discountType !== "none" ? Number((subtotal * 0.2).toFixed(2)) : Number(body.discount ?? 0);
-    if (discount > subtotal) throw Object.assign(new Error("Discount cannot exceed subtotal"), { status: 400, code: "INVALID_INPUT" });
     const tax = Number((subtotal * 0.1).toFixed(2));
-    const total = Number((subtotal - discount + tax).toFixed(2));
     const cash = body.paymentMethod === "Cash";
-    const received = Number(body.amountReceived ?? total);
-    if (!Number.isFinite(received) || received < 0 || (cash && received < total)) throw Object.assign(new Error("Cash amount must cover the total"), { status: 400, code: "CASH_SHORTFALL" });
+    const received = Number(body.amountReceived ?? subtotal);
+    const saleTotals = validateSaleTotals({ subtotal, discount, tax, amountReceived: received, paymentMethod: body.paymentMethod });
+    if (!saleTotals.valid) throw Object.assign(new Error(saleTotals.reason ?? "Sale totals are invalid"), { status: 400, code: "INVALID_INPUT" });
+    const total = saleTotals.total;
     const saleId = `TXN-${randomUUID()}`;
     await client.query("INSERT INTO sales (id,cashier_id,transaction_date,subtotal,discount,tax,total_amount,payment_method,amount_received,change_amount,status,idempotency_key) VALUES ($1,$2,now(),$3,$4,$5,$6,$7,$8,$9,'PENDING',$10)", [saleId,req.user!.id,subtotal,discount,tax,total,body.paymentMethod,cash ? received : total,cash ? received-total : 0,body.idempotencyKey]);
     for (const line of lines) {
@@ -696,7 +696,10 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
     res.status(paymentStatus === "PAID" ? 201 : paymentStatus === "PENDING" ? 202 : 402).json({ id: saleId, paymentId, status: paymentStatus, simulated: !cash, totalAmount: total, changeAmount: cash ? received-total : 0, items: lines });
   } catch (error) {
     await client.query("ROLLBACK");
-    const failure = error as Error & { status?: number; code?: string };
+    const failure = error as Error & { status?: number; code?: string; constraint?: string };
+    if (failure.code === "23514") {
+      return res.status(409).json({ code: "INVALID_STATE", error: "The sale totals or stock are inconsistent. Please refresh and try again." });
+    }
     res.status(failure.status ?? 500).json({ code: failure.code ?? "SALE_FAILED", error: failure.status ? failure.message : "The sale could not be completed" });
   } finally { client.release(); }
 });
