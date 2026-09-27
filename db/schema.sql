@@ -148,6 +148,9 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE schema_migrations ALTER COLUMN applied_at SET DEFAULT now();
+CREATE UNIQUE INDEX IF NOT EXISTS schema_migrations_version_uidx ON schema_migrations (version);
+
 CREATE TABLE IF NOT EXISTS sale_items (
   id TEXT PRIMARY KEY, sale_id TEXT NOT NULL REFERENCES sales(id), medicine_id TEXT NOT NULL REFERENCES medicines(id), quantity INTEGER NOT NULL CHECK (quantity > 0), unit_price NUMERIC(12,2) NOT NULL CHECK (unit_price >= 0), subtotal NUMERIC(12,2) NOT NULL CHECK (subtotal >= 0)
 );
@@ -169,6 +172,21 @@ CREATE TABLE IF NOT EXISTS inventory_transactions (
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(), metadata JSONB NOT NULL DEFAULT '{}'::jsonb, success BOOLEAN NOT NULL
 );
+
+ALTER TABLE users ALTER COLUMN created_at SET DEFAULT now();
+ALTER TABLE users ALTER COLUMN updated_at SET DEFAULT now();
+ALTER TABLE suppliers ALTER COLUMN created_at SET DEFAULT now();
+ALTER TABLE suppliers ALTER COLUMN updated_at SET DEFAULT now();
+ALTER TABLE medicines ALTER COLUMN created_at SET DEFAULT now();
+ALTER TABLE medicines ALTER COLUMN updated_at SET DEFAULT now();
+ALTER TABLE sales ALTER COLUMN transaction_date SET DEFAULT now();
+ALTER TABLE purchases ALTER COLUMN purchase_date SET DEFAULT now();
+ALTER TABLE payment_records ALTER COLUMN created_at SET DEFAULT now();
+ALTER TABLE payment_records ALTER COLUMN updated_at SET DEFAULT now();
+ALTER TABLE payment_events ALTER COLUMN occurred_at SET DEFAULT now();
+ALTER TABLE backup_history ALTER COLUMN requested_at SET DEFAULT now();
+ALTER TABLE inventory_transactions ALTER COLUMN occurred_at SET DEFAULT now();
+ALTER TABLE audit_logs ALTER COLUMN occurred_at SET DEFAULT now();
 
 CREATE OR REPLACE FUNCTION pharmasync_prevent_audit_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
