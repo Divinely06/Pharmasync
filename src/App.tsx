@@ -801,6 +801,7 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
   const [purchaseDraft, setPurchaseDraft] = useState({ supplierId: state.suppliers[0]?.id ?? "", medicineId: state.medicines[0]?.id ?? "", quantity: "1", unitCost: "0", batchNumber: "", expirationDate: "", referenceNumber: `PO-${Date.now()}` });
   const [movementDraft, setMovementDraft] = useState({ batchId: state.medicineBatches[0]?.id ?? "", movement: "ADJUSTMENT", quantity: "1", direction: "OUT" as "IN" | "OUT", notes: "" });
   const [operationError, setOperationError] = useState("");
+  const [operationNotice, setOperationNotice] = useState("");
   const [referenceMedicine, setReferenceMedicine] = useState<Awaited<ReturnType<typeof api.medicineDetail>> | null>(null);
   const [referenceLoading, setReferenceLoading] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; confirmLabel: string; onConfirm: () => void } | null>(null);
@@ -814,6 +815,8 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
   });
 
   const openAdd = () => {
+    setOperationError("");
+    setOperationNotice("");
     setDraft({
       barcode: "",
       genericName: "",
@@ -839,6 +842,8 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
   };
 
   const openEdit = (item: Medicine) => {
+    setOperationError("");
+    setOperationNotice("");
     setDraft(item);
     setModal({ mode: "Edit", item });
   };
@@ -853,9 +858,9 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
   };
 
   const performSave = async () => {
-
     try {
       setOperationError("");
+      setOperationNotice("");
       await api.saveMedicine(modal?.mode === "Edit" ? modal.item?.id : undefined, {
         barcode: draft.barcode,
         genericName: draft.genericName,
@@ -874,9 +879,11 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
         reorderLevel: Number(draft.reorderLevel ?? 10),
         ...(modal?.mode === "Add" ? { quantity: Number(draft.quantity ?? 0), expirationDate: draft.expirationDate, batchNumber: draft.batchNumber } : {}),
       });
-      await onRefresh();
       setModal(null);
       setDraft({});
+      setOperationNotice("Medicine saved.");
+      try { await onRefresh(); }
+      catch (error) { setOperationError(`Medicine saved, but inventory could not refresh: ${errorMessage(error)}`); }
     } catch (error) {
       setOperationError(error instanceof ApiError ? `${errorMessage(error)} (${error.status}${error.code ? ` · ${error.code}` : ""})` : errorMessage(error));
     }
@@ -934,8 +941,16 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
   };
 
   const performDelete = async (itemId: string) => {
-    try { await api.archiveMedicine(itemId); await onRefresh(); }
-    catch (error) { setOperationError(error instanceof ApiError ? `${errorMessage(error)} (${error.status}${error.code ? ` · ${error.code}` : ""})` : errorMessage(error)); }
+    setOperationError("");
+    setOperationNotice("");
+    try {
+      await api.archiveMedicine(itemId);
+      setOperationNotice("Medicine archived. Restore it from Backups if needed.");
+      try { await onRefresh(); }
+      catch (error) { setOperationError(`Medicine archived, but inventory could not refresh: ${errorMessage(error)}`); }
+    } catch (error) {
+      setOperationError(error instanceof ApiError ? `${errorMessage(error)} (${error.status}${error.code ? ` · ${error.code}` : ""})` : errorMessage(error));
+    }
   };
 
   const viewReference = async (id: string) => {
@@ -952,6 +967,8 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
 
   return (
     <div className="space-y-4">
+      {operationError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{operationError}</div>}
+      {operationNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{operationNotice}</div>}
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <div className="text-xl font-bold text-slate-900">Inventory</div>
@@ -1010,8 +1027,6 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
           </table>
         </div>
       </div>
-      {operationError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{operationError}</div>}
-
       {!lowStockOnly && !expiringSoonOnly && <div className="grid gap-4 xl:grid-cols-2">
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <h2 className="mb-4 text-sm font-bold text-slate-900">Purchase receiving</h2>
@@ -1042,7 +1057,6 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
             <Field label="Notes" value={movementDraft.notes} onChange={(value) => setMovementDraft({ ...movementDraft, notes: value })} />
             <button onClick={() => void recordMovement()} disabled={!state.medicineBatches.length} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">Record movement</button>
           </div>
-          {operationError && <div role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{operationError}</div>}
           <div className="mt-5 border-t border-slate-100 pt-3"><div className="mb-2 text-xs font-bold text-slate-700">Recent movements</div>{state.inventoryTransactions.slice(0, 6).map((movement) => <div key={movement.id} className="flex justify-between gap-2 border-b border-slate-50 py-2 text-[10px] text-slate-600"><span>{movement.transactionType} · {state.medicines.find((medicine) => medicine.id === movement.medicineId)?.brandName ?? movement.medicineId}</span><span>{movement.quantity > 0 ? "+" : ""}{movement.quantity} · {new Date(movement.timestamp).toLocaleDateString()}</span></div>)}</div>
         </section>
       </div>}
@@ -1092,6 +1106,7 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
               </div>
             </div>
 
+            {operationError && <div role="alert" className="mx-5 mb-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{operationError}</div>}
             <div className="flex justify-end gap-3 border-t border-slate-100 p-5">
               <button onClick={() => setModal(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button>
               <button onClick={saveItem} className="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-teal-500">Save</button>
