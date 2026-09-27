@@ -414,6 +414,18 @@ app.delete("/api/users/:id", auth, allow("ADMIN"), async (req: AuthRequest, res)
   res.json({ id: req.params.id, status: "INACTIVE" });
 });
 
+app.post("/api/users/:id/restore", auth, allow("ADMIN"), async (req: AuthRequest, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query("UPDATE users SET status='ACTIVE',updated_at=now() WHERE id=$1 AND status='INACTIVE' RETURNING username,full_name", [req.params.id]);
+    if (!result.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ code: "NOT_FOUND", error: "Deactivated user not found" }); }
+    await audit(client,req.user!.id,"RESTORE_USER","USER",String(req.params.id),{ username:result.rows[0].username,fullName:result.rows[0].full_name });
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  res.json({ id: req.params.id, status: "ACTIVE" });
+});
+
 app.post("/api/users/:id/reset-password", auth, allow("ADMIN"), async (req: AuthRequest, res) => {
   if (req.params.id === req.user!.id) return res.status(409).json({ code: "SELF_PASSWORD_RESET", error: "Use the account recovery flow to change your own password" });
   const parsed = passwordResetSchema.safeParse(req.body);

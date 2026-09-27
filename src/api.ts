@@ -74,6 +74,7 @@ export const api = {
   backupChanges: () => request<{ logs: AuditLog[] }>("/backups/changes"),
   archivedMedicines: () => request<{ medicines: Medicine[] }>("/medicines/archived"),
   restoreMedicine: (id: string) => request<{ id: string }>(`/medicines/${encodeURIComponent(id)}/restore`, { method: "POST" }),
+  restoreUser: (id: string) => request<{ id: string; status: string }>(`/users/${encodeURIComponent(id)}/restore`, { method: "POST" }),
   createBackup: () => request<{ id: string; status: string; fileName: string; fileSizeBytes: number }>("/backups", { method: "POST" }),
   searchMedicines: (q: string, page = 1, pageSize = 30) => request<{ medicines: (Medicine & { supplierName?: string; availableQuantity: number })[]; total: number; page: number; pageSize: number; totalPages: number }>(`/medicines?${new URLSearchParams({ q, page: String(page), pageSize: String(pageSize) })}`),
   medicineDetail: (id: string) => request<PharmacyState["medicines"][number] & { batches: PharmacyState["medicineBatches"]; notice: string }>(`/medicines/${encodeURIComponent(id)}`),

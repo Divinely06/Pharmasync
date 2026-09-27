@@ -350,7 +350,7 @@ function SystemShell({
           {page === "suppliers" && <SuppliersPage state={state} onRefresh={refreshData} />}
           {page === "users" && currentUser.role === "ADMIN" && <UsersPage state={state} onRefresh={refreshData} currentUser={currentUser} />}
           {page === "audit" && currentUser.role === "ADMIN" && <AuditPage />}
-          {page === "backups" && currentUser.role === "ADMIN" && <BackupsPage />}
+          {page === "backups" && currentUser.role === "ADMIN" && <BackupsPage state={state} onRefresh={refreshData} />}
           {page === "reports" && <ReportsPage state={state} />}
         </div>
       </main>
@@ -853,11 +853,6 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
       return;
     }
 
-    if (modal?.mode === "Edit") {
-      setConfirmDialog({ title: "Save medicine update?", message: `Are you sure you want to save changes to ${draft.brandName}?`, confirmLabel: "Save update", onConfirm: () => void performSave() });
-      return;
-    }
-
     await performSave();
   };
 
@@ -1213,6 +1208,10 @@ function UsersPage({ state, onRefresh, currentUser }: { state: PharmacyState; on
       window.alert("Use a password with at least 10 characters.");
       return;
     }
+    if (editingUserId) {
+      await performSave();
+      return;
+    }
     setConfirmDialog({ title: editingUserId ? "Save user update?" : "Create user?", message: `Are you sure you want to ${editingUserId ? "save these changes to" : "create"} ${draft.fullName}?`, confirmLabel: editingUserId ? "Save update" : "Create user", onConfirm: () => void performSave() });
   };
 
@@ -1381,7 +1380,7 @@ function AuditPage() {
   );
 }
 
-function BackupsPage() {
+function BackupsPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => Promise<PharmacyState> }) {
   const [backups, setBackups] = useState<import("./api").BackupRecord[]>([]);
   const [archivedMedicines, setArchivedMedicines] = useState<Medicine[]>([]);
   const [changes, setChanges] = useState<AuditLog[]>([]);
@@ -1412,9 +1411,17 @@ function BackupsPage() {
 
   const performRestoreMedicine = async (medicine: Medicine) => {
     setError("");
-    try { await api.restoreMedicine(medicine.id); setReloadKey((key) => key + 1); }
+    try { await api.restoreMedicine(medicine.id); await onRefresh(); setReloadKey((key) => key + 1); }
     catch (reason) { setError(errorMessage(reason)); }
   };
+
+  const restoreUser = async (user: PharmacyUser) => {
+    setError("");
+    try { await api.restoreUser(user.id); await onRefresh(); }
+    catch (reason) { setError(errorMessage(reason)); }
+  };
+
+  const inactiveUsers = state.users.filter((user) => user.status === "INACTIVE");
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -1428,6 +1435,10 @@ function BackupsPage() {
       <section className="border-t border-slate-100 p-4">
         <div className="mb-3"><h3 className="text-sm font-bold text-slate-900">Deleted medicines</h3><p className="mt-1 text-xs text-slate-500">Archived medicines can be recovered here.</p></div>
         {archivedMedicines.length === 0 ? <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No deleted medicines.</div> : <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="min-w-full text-left text-xs"><thead className="bg-slate-50 text-slate-600"><tr><th className="px-3 py-2">Medicine</th><th className="px-3 py-2">Barcode</th><th className="px-3 py-2">Stock</th><th className="px-3 py-2">Deleted/updated</th><th className="px-3 py-2" /></tr></thead><tbody className="divide-y divide-slate-100">{archivedMedicines.map((medicine) => <tr key={medicine.id}><td className="px-3 py-2"><div className="font-semibold text-slate-800">{medicine.brandName}</div><div className="text-slate-500">{medicine.genericName}</div></td><td className="px-3 py-2 text-slate-600">{medicine.barcode}</td><td className="px-3 py-2 text-slate-600">{medicine.quantity}</td><td className="px-3 py-2 text-slate-500">{new Date(medicine.updatedAt).toLocaleString()}</td><td className="px-3 py-2 text-right"><button onClick={() => void restoreMedicine(medicine)} className="font-semibold text-teal-700">Restore</button></td></tr>)}</tbody></table></div>}
+      </section>
+      <section className="border-t border-slate-100 p-4">
+        <div className="mb-3"><h3 className="text-sm font-bold text-slate-900">Deactivated users</h3><p className="mt-1 text-xs text-slate-500">Reactivating a user does not restore their previous sessions.</p></div>
+        {inactiveUsers.length === 0 ? <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No deactivated users.</div> : <div className="divide-y divide-slate-100 rounded-xl border border-slate-200">{inactiveUsers.map((user) => <div key={user.id} className="flex flex-wrap items-center justify-between gap-3 p-3"><div><div className="text-sm font-semibold text-slate-800">{user.fullName}</div><div className="text-xs text-slate-500">{user.username} · {user.role} · {user.email}</div></div><button onClick={() => void restoreUser(user)} className="text-xs font-semibold text-teal-700">Restore</button></div>)}</div>}
       </section>
       <section className="border-t border-slate-100 p-4">
         <div className="mb-3"><h3 className="text-sm font-bold text-slate-900">All record changes</h3><p className="mt-1 text-xs text-slate-500">Created, edited, deleted, restored, and account changes.</p></div>
