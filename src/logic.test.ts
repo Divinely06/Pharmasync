@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { canAccess, buildAuditLog, calculateTotals, dateKey, matchesMedicineCategory } from './data';
+import { canAccess, buildAuditLog, calculateTotals, dateKey, getVisibleCategoryFilters, matchesMedicineCategory } from './data';
 import { api } from './api';
 import { missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from '../server/db';
 import { isRequestOriginAllowed, loginSchema, medicineSchema, passwordChangeSchema, passwordResetSchema, saleSchema, sessionTokenSchema, userCreateSchema } from '../server/validation';
@@ -16,6 +16,7 @@ describe('pharmacy system logic', () => {
     expect(canAccess('ADMIN', 'USERS')).toBe(true);
     expect(canAccess('PHARMACIST', 'INVENTORY')).toBe(true);
     expect(canAccess('PHARMACIST', 'POS')).toBe(false);
+    expect(canAccess('PHARMACIST', 'REPORTS')).toBe(false);
     expect(canAccess('PHARMACIST', 'USERS')).toBe(false);
     expect(canAccess('CASHIER', 'POS')).toBe(true);
     expect(canAccess('CASHIER', 'INVENTORY')).toBe(false);
@@ -30,6 +31,16 @@ describe('pharmacy system logic', () => {
     expect(matchesMedicineCategory('Antacid', 'Antacids')).toBe(true);
     expect(matchesMedicineCategory('Vitamin', 'Vitamins')).toBe(true);
     expect(matchesMedicineCategory('Cardiovascular', 'Antibiotics')).toBe(false);
+  });
+
+  it('hides unavailable POS categories while keeping valid ones visible', () => {
+    const medicines = [
+      { medicineType: 'Antibiotic', quantity: 0, expirationDate: '2024-01-01' },
+      { medicineType: 'Cardiovascular', quantity: 12, expirationDate: '2030-01-01' },
+      { medicineType: 'Analgesic', quantity: 0, expirationDate: '2024-01-01' },
+    ] as const;
+
+    expect(getVisibleCategoryFilters(medicines, (medicine) => medicine.quantity > 0)).toEqual(['All', 'Cardiovascular']);
   });
 
   it('creates audit entries with clear metadata', () => {

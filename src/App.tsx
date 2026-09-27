@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AccessArea,
   AuditLog,
@@ -11,6 +11,7 @@ import {
   canAccess,
   dateKey,
   fmt,
+  getVisibleCategoryFilters,
   matchesMedicineCategory,
 } from "./data";
 import { ApiError, api, type ReceiptData, type ReportData } from "./api";
@@ -335,16 +336,16 @@ function SystemShell({
 
         <div className="absolute bottom-0 left-0 right-0 border-t border-slate-200 bg-white p-4">
           <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-700">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-700 shrink-0">
                 {currentUser.fullName
                   .split(" ")
                   .map((part) => part[0])
                   .slice(0, 2)
                   .join("")}
               </div>
-              <div>
-                <div className="text-sm font-semibold text-slate-800">{currentUser.fullName}</div>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-slate-800">{currentUser.fullName}</div>
                 <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{currentUser.role}</div>
                 <button onClick={() => { setPasswordDialogOpen(true); setPasswordError(""); setPasswordNotice(""); }} className="mt-1 text-[10px] font-semibold text-teal-700 underline">Change password</button>
               </div>
@@ -543,26 +544,32 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     };
   }, [scannerOpen]);
 
-  useEffect(() => {
+  const loadRemoteMedicines = useCallback((nextSearch = search.trim(), page = searchPage) => {
     let active = true;
-    const timer = window.setTimeout(() => {
-      setSearchLoading(true);
-      setSearchError("");
-      void api.searchMedicines(search.trim(), searchPage, 30).then((result) => {
-        if (!active) return;
-        setRemoteMedicines((previous) => searchPage === 1 ? result.medicines : [...previous, ...result.medicines.filter((medicine) => !previous.some((entry) => entry.id === medicine.id))]);
-        setSearchTotal(result.total);
-      }).catch((error) => { if (active) setSearchError(errorMessage(error)); }).finally(() => { if (active) setSearchLoading(false); });
-    }, 250);
-    return () => { active = false; window.clearTimeout(timer); };
+    setSearchLoading(true);
+    setSearchError("");
+    void api.searchMedicines(nextSearch, page, 30).then((result) => {
+      if (!active) return;
+      setRemoteMedicines((previous) => page === 1 ? result.medicines : [...previous, ...result.medicines.filter((medicine) => !previous.some((entry) => entry.id === medicine.id))]);
+      setSearchTotal(result.total);
+    }).catch((error) => { if (active) setSearchError(errorMessage(error)); }).finally(() => { if (active) setSearchLoading(false); });
+    return () => { active = false; };
   }, [search, searchPage]);
+
+  useEffect(() => {
+    const cleanup = loadRemoteMedicines();
+    return cleanup;
+  }, [loadRemoteMedicines]);
 
   const availableStock = (medicineId: string) => state.medicineBatches
     .filter((batch) => batch.medicineId === medicineId && batch.quantity > 0 && batch.expirationDate >= today())
     .reduce((total, batch) => total + batch.quantity, 0);
 
+  const visibleCategories = getVisibleCategoryFilters(remoteMedicines, (medicine) => availableStock(medicine.id) > 0);
+  const categoryFilters = visibleCategories.includes(category) ? category : "All";
+  const selectedCategory = categoryFilters;
   const items = remoteMedicines.filter((medicine) => {
-    const matchCategory = matchesMedicineCategory(medicine.medicineType, category);
+    const matchCategory = matchesMedicineCategory(medicine.medicineType, selectedCategory);
     return matchCategory && availableStock(medicine.id) > 0;
   });
 
@@ -605,9 +612,19 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   const removeFromCart = (medicineId: string) => setCart((prev) => prev.filter((item) => item.id !== medicineId));
 
   const completeSale = async (saleId: string) => {
-    const sale = await api.receipt(saleId);
-    setReceipt(sale);
-    void onRefresh().catch(() => undefined);
+    const loaded = await onRefresh();
+    const sale = loaded.sales.find((entry) => entry.id === saleId);
+    if (!sale) throw new Error("The sale was completed, but its receipt details could not be loaded.");
+    setReceipt({
+      ...sale,
+      paymentStatus: sale.status === "COMPLETED" ? "PAID" : sale.status,
+      provider: null,
+      providerReference: null,
+      simulated: false,
+      items: sale.items.map((item) => ({ ...item, batches: [] })),
+    });
+    setRemoteMedicines([]);
+    setSearchPage(1);
     setPendingPayment(null);
     setCart([]);
     setDiscount("0");
@@ -718,8 +735,8 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
           {scannerOpen && <div className="mb-3 rounded-xl bg-slate-900 p-3"><video ref={videoRef} autoPlay playsInline muted className="max-h-64 w-full rounded-lg object-cover" /><button onClick={() => setScannerOpen(false)} className="mt-2 text-xs font-semibold text-white">Close scanner</button></div>}
           {scannerError && <div role="status" className="mb-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">{scannerError}</div>}
           <div className="flex flex-wrap gap-2">
-            {['All', 'Antibiotics', 'Analgesics', 'Cardiovascular', 'Diabetes', 'Antihistamine', 'Antacids', 'Vitamins', 'Respiratory', 'Dermatology'].map((filter) => (
-              <button key={filter} onClick={() => setCategory(filter)} className={`rounded-full px-3 py-1.5 text-xs font-medium ${category === filter ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+            {visibleCategories.map((filter) => (
+              <button key={filter} onClick={() => setCategory(filter)} className={`rounded-full px-3 py-1.5 text-xs font-medium ${selectedCategory === filter ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
                 {filter}
               </button>
             ))}

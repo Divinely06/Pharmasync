@@ -97,6 +97,7 @@ const allow = (...roles: SessionUser["role"][]) => async (req: AuthRequest, res:
 };
 const audit = async (client: PoolClient, userId: string, action: string, entityType: string, entityId: string, metadata: object, success = true) => {
   await client.query("INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, metadata, success) VALUES ($1,$2,$3,$4,$5,$6,$7)", [`log-${randomUUID()}`, userId, action, entityType, entityId, metadata, success]);
+  await client.query("DELETE FROM audit_logs WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY occurred_at DESC, id DESC LIMIT 150)");
 };
 const withClient = async <T>(operation: (client: PoolClient) => Promise<T>): Promise<T> => {
   const client = await pool.connect();

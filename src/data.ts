@@ -166,7 +166,7 @@ export const CATEGORIES = [
   "Vitamins",
   "Respiratory",
   "Dermatology",
-]
+] as const;
 
 export const ROLE_ACCESS: Record<UserRole, AccessArea[]> = {
   ADMIN: [
@@ -179,22 +179,38 @@ export const ROLE_ACCESS: Record<UserRole, AccessArea[]> = {
     "AUDIT",
     "SETTINGS",
   ],
-  PHARMACIST: ["DASHBOARD", "INVENTORY", "SUPPLIERS", "REPORTS", "SETTINGS"],
+  PHARMACIST: ["DASHBOARD", "INVENTORY", "SUPPLIERS", "SETTINGS"],
   CASHIER: ["DASHBOARD", "POS"],
-}
+};
 
 export const canAccess = (role: UserRole, area: AccessArea) =>
-  ROLE_ACCESS[role]?.includes(area) ?? false
+  ROLE_ACCESS[role]?.includes(area) ?? false;
 
 const medicineCategoryValues: Record<string, string[]> = {
   Antibiotics: ["Antibiotic", "Antibiotics"],
   Analgesics: ["Analgesic", "Analgesics"],
+  Cardiovascular: ["Cardiovascular"],
+  Diabetes: ["Diabetes"],
+  Antihistamine: ["Antihistamine", "Antihistamines"],
   Antacids: ["Antacid", "Antacids"],
   Vitamins: ["Vitamin", "Vitamins"],
-}
+  Respiratory: ["Respiratory"],
+  Dermatology: ["Dermatology"],
+};
 
 export const matchesMedicineCategory = (medicineType: string, category: string) =>
-  category === "All" || (medicineCategoryValues[category] ?? [category]).includes(medicineType)
+  category === "All" || (medicineCategoryValues[category] ?? [category]).includes(medicineType);
+
+export const getVisibleCategoryFilters = <T extends { medicineType: string; quantity: number; expirationDate: string }>(items: ReadonlyArray<T>, isVisible: (item: T) => boolean) => {
+  const available = new Set<string>();
+  const categories = CATEGORIES.filter((category) => category !== "All");
+  for (const category of categories) {
+    if (items.some((item) => matchesMedicineCategory(item.medicineType, category) && isVisible(item))) {
+      available.add(category);
+    }
+  }
+  return ["All", ...available];
+};
 
 export const fmt = (n: number) =>
   "₱" +
