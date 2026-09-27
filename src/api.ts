@@ -31,6 +31,14 @@ export type ReceiptData = Omit<SaleRecord, "items"> & {
 
 export type BackupRecord = { id: string; requestedAt: string; completedAt: string | null; status: "PENDING" | "COMPLETED" | "FAILED"; fileName: string | null; fileSizeBytes: number | null; errorMessage: string | null; requestedBy: string | null };
 
+const reportQuery = (filters: { from?: string; to?: string }) => {
+  const params = new URLSearchParams();
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
+  const query = params.toString();
+  return query ? `?${query}` : "";
+};
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
@@ -59,10 +67,10 @@ export const api = {
   logout: () => request<{ ok: true }>("/logout", { method: "POST" }),
   state: () => request<PharmacyState>("/state"),
   audit: (filters: { page: number; pageSize: number; actor: string; action: string; entityType: string; search: string }) => request<{ logs: AuditLog[]; page: number; pageSize: number; total: number; totalPages: number }>(`/audit?${new URLSearchParams({ page: String(filters.page), pageSize: String(filters.pageSize), actor: filters.actor, action: filters.action, entityType: filters.entityType, search: filters.search })}`),
-  reports: (filters: { from?: string; to?: string } = {}) => request<ReportData>(`/reports?${new URLSearchParams(filters)}`),
+  reports: (filters: { from?: string; to?: string } = {}) => request<ReportData>(`/reports${reportQuery(filters)}`),
   salesReportCsv: async (filters: { from?: string; to?: string } = {}) => {
     let response: Response;
-    try { response = await fetch(`/api/reports/sales.csv?${new URLSearchParams(filters)}`, { credentials: "same-origin" }); }
+    try { response = await fetch(`/api/reports/sales.csv${reportQuery(filters)}`, { credentials: "same-origin" }); }
     catch { throw new ApiError(0, "The pharmacy service is unreachable. Check the connection and retry.", "NETWORK_ERROR"); }
     if (!response.ok) {
       const result = await response.json().catch(() => ({})) as { error?: string; code?: string };

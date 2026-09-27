@@ -15,10 +15,12 @@ import { applyDatabaseSchema, normalizeDatabaseUrl } from "./db.js";
 
 const connectionString = normalizeDatabaseUrl(process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI ?? "");
 if (!connectionString) throw new Error("DATABASE_URL is required");
+const businessTimeZone = "Asia/Manila";
 const serverless = Boolean(process.env.VERCEL);
 function createPool() {
   return new Pool({
     connectionString,
+    options: `-c timezone=${businessTimeZone}`,
     max: Number(process.env.DB_POOL_MAX ?? 1),
     idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS ?? (serverless ? 1000 : 10000)),
     connectionTimeoutMillis: Number(process.env.DB_CONNECTION_TIMEOUT_MS ?? 5000),
@@ -520,7 +522,8 @@ app.post("/api/purchases/:id/receive", auth, allow("ADMIN", "PHARMACIST"), async
     if (purchase.rows[0].status !== "PENDING") { await client.query("ROLLBACK"); return res.status(409).json({ code: "INVALID_STATE", error: "Only pending purchases can be received" }); }
     const items = await client.query("SELECT medicine_id,quantity,batch_number,expiration_date::text AS expiration_date FROM purchase_items WHERE purchase_id=$1 ORDER BY id", [req.params.id]);
     for (const item of items.rows) {
-      if (item.expiration_date < new Date().toISOString().slice(0, 10)) throw Object.assign(new Error(`Cannot receive expired batch ${item.batch_number}`), { status: 400, code: "EXPIRED_BATCH" });
+      const businessDate = new Intl.DateTimeFormat("en-CA", { timeZone: businessTimeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+      if (item.expiration_date < businessDate) throw Object.assign(new Error(`Cannot receive expired batch ${item.batch_number}`), { status: 400, code: "EXPIRED_BATCH" });
       const medicine = await client.query("SELECT id,quantity FROM medicines WHERE id=$1 AND status='ACTIVE' FOR UPDATE", [item.medicine_id]);
       if (!medicine.rowCount) throw Object.assign(new Error("Medicine is no longer active"), { status: 409, code: "MEDICINE_UNAVAILABLE" });
       const batch = await client.query("SELECT id,expiration_date::text AS expiration_date FROM medicine_batches WHERE medicine_id=$1 AND batch_number=$2 FOR UPDATE", [item.medicine_id,item.batch_number]);
@@ -658,7 +661,7 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
         const stock = await client.query("UPDATE medicines SET quantity=quantity-$1,updated_at=now() WHERE id=$2 RETURNING quantity", [line.quantity,line.id]);
         await client.query("INSERT INTO inventory_transactions (id,medicine_id,transaction_type,quantity,previous_quantity,resulting_quantity,reference_id,performed_by,occurred_at,notes) VALUES ($1,$2,'SALE',$3,$4,$5,$6,$7,now(),$8)", [`inv-${randomUUID()}`,line.id,line.quantity,stock.rows[0].quantity+line.quantity,stock.rows[0].quantity,saleId,req.user!.id,`POS sale ${saleId}`]);
       }
-      await audit(client,req.user!.id,"SALE_COMPLETED","SALE",saleId,{ total,paymentMethod:body.paymentMethod, discountType:body.discountType, discountId:body.discountId || null, simulated:!cash });
+      await audit(client,req.user!.id,"SALE_COMPLETED","SALE",saleId,{ total,paymentMethod:body.paymentMethod, discountType:body.discountType, discountIdProvided:Boolean(body.discountId.trim()), simulated:!cash });
       if (!cash) await audit(client,req.user!.id,"PAYMENT_PAID","PAYMENT",paymentId!,{ provider:"DUMMY",saleId });
     } else {
       if (paymentStatus !== "PENDING") await client.query("UPDATE sales SET status='VOIDED' WHERE id=$1", [saleId]);

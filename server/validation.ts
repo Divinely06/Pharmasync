@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const requiredText = (max = 250) => z.string().trim().min(1).max(max);
 const optionalText = (max = 1000) => z.string().max(max).optional().default("");
-const nonNegativeMoney = z.coerce.number().finite().nonnegative();
+const nonNegativeMoney = z.coerce.number().finite().nonnegative().refine((value) => Math.round(value * 100) / 100 === value);
 const nonNegativeInteger = z.coerce.number().int().nonnegative();
 
 const normalizeOrigin = (value: string | undefined) => value ? value.replace(/\/$/, "") : value;

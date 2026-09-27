@@ -11,6 +11,7 @@ import {
   canAccess,
   dateKey,
   fmt,
+  matchesMedicineCategory,
 } from "./data";
 import { ApiError, api, type ReceiptData, type ReportData } from "./api";
 import {
@@ -529,14 +530,14 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     .reduce((total, batch) => total + batch.quantity, 0);
 
   const items = remoteMedicines.filter((medicine) => {
-    const matchCategory = category === "All" || medicine.medicineType === category;
+    const matchCategory = matchesMedicineCategory(medicine.medicineType, category);
     return matchCategory && availableStock(medicine.id) > 0;
   });
 
   const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
   const requestedDiscount = Number(discount || 0);
   const manualDiscountValue = Math.max(0, Number.isFinite(requestedDiscount) ? requestedDiscount : 0);
-  const qualifiedDiscount = discountType !== "none" && discountId.trim() ? subtotal * 0.2 : 0;
+  const qualifiedDiscount = discountType !== "none" && discountId.trim() ? Number((subtotal * 0.2).toFixed(2)) : 0;
   const discountValue = Math.min(subtotal, discountType !== "none" ? qualifiedDiscount : manualDiscountValue);
   const taxValue = Number((subtotal * 0.1).toFixed(2));
   const total = Number(Math.max(0, subtotal - discountValue + taxValue).toFixed(2));
@@ -1496,7 +1497,6 @@ function ReportsPage({ state }: { state: PharmacyState }) {
     return () => { active = false; };
   }, [applied]);
 
-  const sales = state.sales.filter((sale) => sale.status === "COMPLETED");
   const totalRevenue = report?.summary.totalRevenue ?? 0;
   const inventoryValue = report?.inventory.value ?? 0;
   const totalUnits = report?.summary.totalUnits ?? 0;
@@ -1508,26 +1508,34 @@ function ReportsPage({ state }: { state: PharmacyState }) {
   const movement = (report?.movement ?? []).map((entry) => ({ ...entry, month: new Date(`${entry.month}-01T12:00:00`).toLocaleString("en", { month: "short" }) }));
 
   const download = (name: string, rows: string[][]) => {
-    const csv = rows.map((row) => row.map((value) => `"${value.replace(/"/g, '""')}"`).join(",")).join("\n");
+    const cell = (value: string) => {
+      const safeValue = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+      return `"${safeValue.replace(/"/g, '""')}"`;
+    };
+    const csv = rows.map((row) => row.map(cell).join(",")).join("\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = name;
     link.click();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  const exportSales = () => {
-    const filteredSales = sales.filter((sale) => {
-      const date = dateKey(sale.transactionDate);
-      return date >= applied.from && date <= applied.to;
-    });
-    download(`sales-${applied.from}-${applied.to}.csv`, [
-      ["Transaction", "Date", "Cashier", "Payment", "Subtotal", "Discount", "VAT", "Total", "Items"],
-      ...filteredSales.map((sale) => [sale.id, sale.transactionDate, sale.cashierName, sale.paymentMethod, String(sale.subtotal), String(sale.discount), String(sale.tax), String(sale.totalAmount), sale.items.map((item) => `${item.medicineName} x ${item.quantity}`).join("; ")]),
-    ]);
+  const exportSales = async () => {
+    setError("");
+    try {
+      const blob = await api.salesReportCsv(applied);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `sales-${applied.from}-${applied.to}.csv`;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
   };
-  const revenueByPayment = byPayment.length > 0 ? byPayment : Object.entries(sales.reduce<Record<string, number>>((totals, sale) => ({ ...totals, [sale.paymentMethod]: (totals[sale.paymentMethod] ?? 0) + sale.totalAmount }), {})).map(([name, value]) => ({ name, value }));
+  const revenueByPayment = byPayment;
   const exportInventory = () => download("inventory-report.csv", [["Medicine", "Barcode", "Stock", "Reorder level", "Unit price", "Expiration"], ...state.medicines.map((medicine) => [medicine.brandName, medicine.barcode, String(medicine.quantity), String(medicine.reorderLevel), String(medicine.unitPrice), medicine.expirationDate])]);
 
   return (
@@ -1538,7 +1546,7 @@ function ReportsPage({ state }: { state: PharmacyState }) {
           <Field label="From date" type="date" value={filters.from} onChange={(from) => setFilters({ ...filters, from })} />
           <Field label="To date" type="date" value={filters.to} onChange={(to) => setFilters({ ...filters, to })} />
           <button onClick={() => setApplied({ ...filters })} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700">Apply dates</button>
-          <button onClick={() => exportSales()} className="inline-flex items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 py-2.5 text-xs font-bold text-white hover:bg-teal-600">Export sales</button>
+          <button onClick={() => void exportSales()} className="inline-flex items-center justify-center gap-2 rounded-xl bg-teal-700 px-4 py-2.5 text-xs font-bold text-white hover:bg-teal-600">Export sales</button>
         </div>
       </div>
 

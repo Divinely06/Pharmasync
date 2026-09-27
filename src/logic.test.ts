@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { canAccess, buildAuditLog, calculateTotals, dateKey } from './data';
+import { canAccess, buildAuditLog, calculateTotals, dateKey, matchesMedicineCategory } from './data';
 import { api } from './api';
 import { normalizeDatabaseUrl } from '../server/db';
 import { isRequestOriginAllowed, medicineSchema, saleSchema } from '../server/validation';
@@ -22,6 +22,14 @@ describe('pharmacy system logic', () => {
     expect(canAccess('CASHIER', 'REPORTS')).toBe(false);
     expect(canAccess('CASHIER', 'AUDIT')).toBe(false);
     expect(canAccess('CASHIER', 'USERS')).toBe(false);
+  });
+
+  it('matches plural POS categories to singular medicine types', () => {
+    expect(matchesMedicineCategory('Antibiotic', 'Antibiotics')).toBe(true);
+    expect(matchesMedicineCategory('Analgesic', 'Analgesics')).toBe(true);
+    expect(matchesMedicineCategory('Antacid', 'Antacids')).toBe(true);
+    expect(matchesMedicineCategory('Vitamin', 'Vitamins')).toBe(true);
+    expect(matchesMedicineCategory('Cardiovascular', 'Antibiotics')).toBe(false);
   });
 
   it('creates audit entries with clear metadata', () => {
@@ -54,6 +62,7 @@ describe('pharmacy system logic', () => {
     vi.stubEnv('TZ', 'Asia/Manila');
 
     expect(dateKey(new Date('2026-09-26T16:00:00.000Z'))).toBe('2026-09-27');
+    expect(dateKey('2026-09-26T16:00:00.000Z')).toBe('2026-09-27');
     expect(dateKey('2026-09-26')).toBe('2026-09-26');
   });
 
@@ -82,6 +91,19 @@ describe('typed API client', () => {
 
     await expect(api.session()).rejects.toMatchObject({ status: 401, code: 'UNAUTHORIZED' });
   });
+
+  it('omits cleared optional report dates from requests', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }))
+      .mockResolvedValueOnce(new Response('csv', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.reports({ from: '', to: '' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/reports', expect.anything());
+
+    await api.salesReportCsv({ from: '', to: '' });
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/reports/sales.csv', expect.objectContaining({ credentials: 'same-origin' }));
+  });
 });
 
 describe('write request validation', () => {
@@ -92,6 +114,14 @@ describe('write request validation', () => {
 
   it('rejects duplicate medicines in one sale request', () => {
     expect(saleSchema.safeParse({ items: [{ medicineId: 'med-1', quantity: 1 }, { medicineId: 'med-1', quantity: 1 }], paymentMethod: 'Cash', idempotencyKey: 'attempt-1' }).success).toBe(false);
+  });
+
+  it('rejects currency values with fractions of a cent', () => {
+    expect(saleSchema.safeParse({ items: [{ medicineId: 'med-1', quantity: 1 }], discount: 0.005, paymentMethod: 'Cash', idempotencyKey: 'attempt-1' }).success).toBe(false);
+    expect(medicineSchema.safeParse({
+      barcode: '12345', genericName: 'Example', brandName: 'Example 10mg', medicineType: 'Other', dosageForm: 'Tablet', strength: '10mg',
+      unitPrice: 0.005, quantity: 2, reorderLevel: 1, expirationDate: '2027-02-28', batchNumber: 'B-1',
+    }).success).toBe(false);
   });
 
   it('rejects invalid batch dates and negative inventory values', () => {

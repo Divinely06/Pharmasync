@@ -186,6 +186,16 @@ export const ROLE_ACCESS: Record<UserRole, AccessArea[]> = {
 export const canAccess = (role: UserRole, area: AccessArea) =>
   ROLE_ACCESS[role]?.includes(area) ?? false
 
+const medicineCategoryValues: Record<string, string[]> = {
+  Antibiotics: ["Antibiotic", "Antibiotics"],
+  Analgesics: ["Analgesic", "Analgesics"],
+  Antacids: ["Antacid", "Antacids"],
+  Vitamins: ["Vitamin", "Vitamins"],
+}
+
+export const matchesMedicineCategory = (medicineType: string, category: string) =>
+  category === "All" || (medicineCategoryValues[category] ?? [category]).includes(medicineType)
+
 export const fmt = (n: number) =>
   "₱" +
   n.toLocaleString("en-PH", {
@@ -200,7 +210,7 @@ export const dateKey = (value: string | Date) => {
     const day = String(value.getDate()).padStart(2, "0");
     return `${year}-${month}-${day}`;
   }
-  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
   return new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value));
 };
 

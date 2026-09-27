@@ -20,7 +20,6 @@ const repairNullTimestampColumns = `
   UPDATE sessions SET created_at = now() WHERE created_at IS NULL;
   ALTER TABLE audit_logs ALTER COLUMN occurred_at SET DEFAULT now();
   UPDATE audit_logs SET occurred_at = now() WHERE occurred_at IS NULL;
-  UPDATE audit_logs SET user_id = 'unknown' WHERE user_id IS NULL AND action IN ('LOGIN_FAILED', 'AUTHORIZATION_FAILED');
   ALTER TABLE medicine_batches ALTER COLUMN created_at SET DEFAULT now();
   ALTER TABLE medicine_batches ALTER COLUMN updated_at SET DEFAULT now();
   UPDATE medicine_batches SET created_at = now() WHERE created_at IS NULL;
