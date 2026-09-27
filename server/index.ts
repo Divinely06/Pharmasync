@@ -88,7 +88,11 @@ const safeUserSelect = 'SELECT id, username, full_name AS "fullName", role, emai
 
 app.get("/api/health", async (_req, res) => {
   try { await pool.query("SELECT 1"); res.json({ ok: true, database: "postgresql" }); }
-  catch { res.status(503).json({ ok: false, code: "DATABASE_UNAVAILABLE", error: "Database is unavailable" }); }
+  catch (error) {
+    logError("database_health_check_failed", error);
+    if ((error as { code?: string }).code === "53300") return res.status(503).json({ ok: false, code: "DATABASE_BUSY", error: "Database connection capacity is exhausted" });
+    res.status(503).json({ ok: false, code: "DATABASE_UNAVAILABLE", error: "Database is unavailable" });
+  }
 });
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false, message: { code: "RATE_LIMITED", error: "Too many login attempts. Try again later." } });
 const backupLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 1, standardHeaders: "draft-8", legacyHeaders: false, skipFailedRequests: true, message: { code: "RATE_LIMITED", error: "A backup was already requested recently" } });
