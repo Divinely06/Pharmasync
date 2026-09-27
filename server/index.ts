@@ -125,7 +125,7 @@ app.post("/api/login", loginLimiter, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1,$2,$3)", [hashToken(token), user.id, new Date(Date.now() + sessionLifetime)]);
+    await client.query("INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES ($1,$2,$3,$4)", [hashToken(token), user.id, new Date(Date.now() + sessionLifetime), new Date()]);
     await client.query("UPDATE users SET last_login = now(), updated_at = now() WHERE id = $1", [user.id]);
     await audit(client, user.id, "LOGIN", "USER", user.id, { username: user.username });
     await client.query("COMMIT");

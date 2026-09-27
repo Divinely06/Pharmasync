@@ -18,6 +18,11 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE sessions ALTER COLUMN token_hash SET NOT NULL;
+ALTER TABLE sessions ALTER COLUMN user_id SET NOT NULL;
+ALTER TABLE sessions ALTER COLUMN created_at SET DEFAULT now();
+UPDATE sessions SET created_at = now() WHERE created_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS suppliers (
   id TEXT PRIMARY KEY, supplier_name TEXT NOT NULL, contact_person TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'INACTIVE')), created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
