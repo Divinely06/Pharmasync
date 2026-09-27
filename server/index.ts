@@ -15,14 +15,17 @@ import { createPaymentProvider, type PaymentStatus } from "./payment-provider.js
 const connectionString = process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI;
 if (!connectionString) throw new Error("DATABASE_URL is required");
 const serverless = Boolean(process.env.VERCEL);
-const pool = new Pool({
-  connectionString,
-  max: Number(process.env.DB_POOL_MAX ?? 1),
-  idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS ?? (serverless ? 1000 : 10000)),
-  connectionTimeoutMillis: Number(process.env.DB_CONNECTION_TIMEOUT_MS ?? 5000),
-  allowExitOnIdle: serverless,
-  ssl: connectionString.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined,
-});
+function createPool() {
+  return new Pool({
+    connectionString,
+    max: Number(process.env.DB_POOL_MAX ?? 1),
+    idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS ?? (serverless ? 1000 : 10000)),
+    connectionTimeoutMillis: Number(process.env.DB_CONNECTION_TIMEOUT_MS ?? 5000),
+    allowExitOnIdle: serverless,
+    ssl: connectionString.includes("sslmode=require") ? { rejectUnauthorized: false } : undefined,
+  });
+}
+let pool = createPool();
 const paymentProvider = createPaymentProvider();
 const app = express();
 const sessionCookie = "pharmasync_session";
@@ -58,6 +61,17 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
+
+if (serverless) {
+  app.use((req, res, next) => {
+    res.on("finish", () => {
+      const closingPool = pool;
+      pool = createPool();
+      closingPool.end().catch(() => undefined);
+    });
+    next();
+  });
+}
 
 type SessionUser = { id: string; username: string; role: "ADMIN" | "PHARMACIST" | "CASHIER" };
 type AuthRequest = Request & { user?: SessionUser };
