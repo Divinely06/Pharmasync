@@ -885,7 +885,7 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
       try { await onRefresh(); }
       catch (error) { setOperationError(`Medicine saved, but inventory could not refresh: ${errorMessage(error)}`); }
     } catch (error) {
-      setOperationError(error instanceof ApiError ? `${errorMessage(error)} (${error.status}${error.code ? ` · ${error.code}` : ""})` : errorMessage(error));
+      setOperationError(errorMessage(error));
     }
   };
 
@@ -949,7 +949,7 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
       try { await onRefresh(); }
       catch (error) { setOperationError(`Medicine archived, but inventory could not refresh: ${errorMessage(error)}`); }
     } catch (error) {
-      setOperationError(error instanceof ApiError ? `${errorMessage(error)} (${error.status}${error.code ? ` · ${error.code}` : ""})` : errorMessage(error));
+      setOperationError(errorMessage(error));
     }
   };
 
