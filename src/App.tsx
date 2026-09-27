@@ -12,8 +12,10 @@ import {
   canAccess,
   dateKey,
   fmt,
+  generateMedicineBarcode,
   getVisibleCategoryFilters,
   matchesMedicineCategory,
+  normalizeBarcode,
 } from "./data";
 import { ApiError, api, type ReceiptData, type ReportData } from "./api";
 import {
@@ -524,11 +526,16 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
       setScannerError("Camera barcode scanning is not supported here. Use a keyboard barcode scanner or type the code.");
       return () => { active = false; };
     }
-    void navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } } }).then(async (camera) => {
-      if (!active) { camera.getTracks().forEach((track) => track.stop()); return; }
+
+    const tryCamera = async (facingMode: "environment" | "user") => {
+      const camera = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facingMode } } });
+      if (!active) {
+        camera.getTracks().forEach((track) => track.stop());
+        return null;
+      }
       stream = camera;
       const video = videoRef.current;
-      if (!video) return;
+      if (!video) return camera;
       video.srcObject = camera;
       await video.play();
       const detector = new Detector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "qr_code"] });
@@ -536,12 +543,24 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
         if (!active) return;
         try {
           const match = (await detector.detect(video))[0];
-          if (match?.rawValue) { setSearch(match.rawValue); setSearchPage(1); setScannerOpen(false); return; }
-        } catch { setScannerError("Unable to read a barcode from this camera frame."); }
+          const rawValue = match?.rawValue ? normalizeBarcode(match.rawValue) : "";
+          if (rawValue) { setSearch(rawValue); setSearchPage(1); setScannerOpen(false); return; }
+        } catch {
+          setScannerError("Unable to read a barcode from this camera frame. Try moving the camera or scanning a clearer label.");
+        }
         animationFrame = window.requestAnimationFrame(() => void scan());
       };
       void scan();
-    }).catch(() => { if (active) setScannerError("Camera permission was denied or no camera is available."); });
+      return camera;
+    };
+
+    void tryCamera("environment")
+      .catch(() => tryCamera("user"))
+      .catch(() => {
+        if (!active) return;
+        setScannerError("Camera permission was denied or no webcam is available. You can still type the barcode manually.");
+      });
+
     return () => {
       active = false;
       window.cancelAnimationFrame(animationFrame);
@@ -867,7 +886,7 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
     setOperationError("");
     setOperationNotice("");
     setDraft({
-      barcode: "",
+      barcode: generateMedicineBarcode("", state.medicines.map((medicine) => medicine.barcode)),
       genericName: "",
       brandName: "",
       medicineType: "Antibiotic",
@@ -898,20 +917,23 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
   };
 
   const saveItem = async () => {
-    if (!draft.brandName || !draft.genericName || !draft.barcode || (modal?.mode === "Add" && (!draft.batchNumber || !draft.expirationDate))) {
+    const barcode = normalizeBarcode(draft.barcode ?? "") || generateMedicineBarcode(draft.brandName ?? "", state.medicines.map((medicine) => medicine.barcode));
+    if (!draft.brandName || !draft.genericName || !barcode || (modal?.mode === "Add" && (!draft.batchNumber || !draft.expirationDate))) {
       window.alert("Please complete all required fields.");
       return;
     }
 
-    await performSave();
+    setDraft((previous) => ({ ...previous, barcode }));
+    await performSave({ barcode });
   };
 
-  const performSave = async () => {
+  const performSave = async (barcodeOverride?: { barcode: string }) => {
     try {
       setOperationError("");
       setOperationNotice("");
+      const resolvedBarcode = normalizeBarcode((barcodeOverride?.barcode ?? draft.barcode ?? "") || "") || generateMedicineBarcode(draft.brandName ?? "", state.medicines.map((medicine) => medicine.barcode));
       await api.saveMedicine(modal?.mode === "Edit" ? modal.item?.id : undefined, {
-        barcode: draft.barcode,
+        barcode: resolvedBarcode,
         genericName: draft.genericName,
         brandName: draft.brandName,
         medicineType: draft.medicineType,

@@ -293,6 +293,45 @@ export const fmt = (n: number) =>
     maximumFractionDigits: 2,
   })
 
+export const normalizeBarcode = (value: string) => value.replace(/\D/g, "").slice(0, 13);
+
+export const generateMedicineBarcode = (seed = "", existing: string[] = []) => {
+  const cleanExisting = new Set(existing.map((entry) => normalizeBarcode(entry)).filter(Boolean));
+  let candidate = normalizeBarcode(seed);
+
+  if (candidate.length < 8) {
+    candidate = `${Date.now().toString().slice(-6)}${Math.random().toString().slice(2, 8)}`;
+  }
+
+  let base = candidate.slice(0, 12);
+  if (base.length < 12) {
+    base = `${base}${Array.from({ length: 12 - base.length }, () => Math.floor(Math.random() * 10)).join("")}`;
+  }
+
+  let weightedSum = 0;
+  for (let index = 0; index < base.length; index += 1) {
+    const digit = Number(base[index]);
+    weightedSum += digit * ((index % 2 === 0) ? 1 : 3);
+  }
+  const checkDigit = (10 - (weightedSum % 10)) % 10;
+  let generated = `${base}${checkDigit}`;
+
+  let attempt = 0;
+  while (cleanExisting.has(generated) && attempt < 25) {
+    const nextSeed = `${Date.now().toString().slice(-6)}${Math.random().toString().slice(2, 8)}${attempt}`;
+    const nextBase = normalizeBarcode(nextSeed).slice(0, 12) || base;
+    let nextWeightedSum = 0;
+    for (let index = 0; index < nextBase.length; index += 1) {
+      const digit = Number(nextBase[index]);
+      nextWeightedSum += digit * ((index % 2 === 0) ? 1 : 3);
+    }
+    generated = `${nextBase}${(10 - (nextWeightedSum % 10)) % 10}`;
+    attempt += 1;
+  }
+
+  return generated;
+};
+
 export const dateKey = (value: string | Date) => {
   if (value instanceof Date) {
     const year = value.getFullYear();

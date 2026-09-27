@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CATEGORIES, canAccess, buildAuditLog, calculateTotals, dateKey, getVisibleCategoryFilters, matchesMedicineCategory } from './data';
+import { CATEGORIES, canAccess, buildAuditLog, calculateTotals, dateKey, generateMedicineBarcode, getVisibleCategoryFilters, matchesMedicineCategory } from './data';
 import { api } from './api';
 import { missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from '../server/db';
 import { isRequestOriginAllowed, loginSchema, medicineSchema, passwordChangeSchema, passwordResetSchema, saleSchema, sessionTokenSchema, userCreateSchema, validateSaleTotals } from '../server/validation';
@@ -104,6 +104,16 @@ describe('pharmacy system logic', () => {
     expect(normalizeDatabaseUrl('postgres://user:pass@host:5432/app?sslmode=require')).toBe('postgres://user:pass@host:5432/app?sslmode=require&uselibpqcompat=true');
     expect(normalizeDatabaseUrl('postgres://user:pass@host:5432/app?sslmode=require&uselibpqcompat=true')).toBe('postgres://user:pass@host:5432/app?sslmode=require&uselibpqcompat=true');
     expect(normalizeDatabaseUrl('postgres://user:pass@host:5432/app')).toBe('postgres://user:pass@host:5432/app');
+  });
+
+  it('creates consistent barcode values for items that need camera scanning', () => {
+    const a = generateMedicineBarcode('Sample Brand');
+    const b = generateMedicineBarcode('Sample Brand', ['480123456001']);
+
+    expect(/^\d{8,13}$/.test(a)).toBe(true);
+    expect(a).not.toBe('480123456001');
+    expect(b).not.toBe('480123456001');
+    expect(b.length).toBeGreaterThanOrEqual(8);
   });
 
   it('reports missing required database tables for readiness checks', () => {
