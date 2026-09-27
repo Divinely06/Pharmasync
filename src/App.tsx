@@ -1432,14 +1432,25 @@ function BackupsPage({ state, onRefresh }: { state: PharmacyState; onRefresh: ()
 
   const performRestoreMedicine = async (medicine: Medicine) => {
     setError("");
-    try { await api.restoreMedicine(medicine.id); await onRefresh(); setReloadKey((key) => key + 1); }
-    catch (reason) { setError(errorMessage(reason)); }
+    try { await api.restoreMedicine(medicine.id); }
+    catch (reason) { setError(`Could not restore ${medicine.brandName}: ${errorMessage(reason)}`); return; }
+    setReloadKey((key) => key + 1);
+    try { await onRefresh(); }
+    catch (reason) { setError(`${medicine.brandName} was restored, but inventory refresh failed: ${errorMessage(reason)}. Do not restore it again; retry the refresh when the database is available.`); }
   };
 
   const restoreUser = async (user: PharmacyUser) => {
     setError("");
-    try { await api.restoreUser(user.id); await onRefresh(); }
-    catch (reason) { setError(errorMessage(reason)); }
+    try { await api.restoreUser(user.id); }
+    catch (reason) { setError(`Could not restore ${user.fullName}: ${errorMessage(reason)}`); return; }
+    try { await onRefresh(); }
+    catch (reason) { setError(`${user.fullName} was restored, but user list refresh failed: ${errorMessage(reason)}. Do not restore them again; retry the refresh when the database is available.`); }
+  };
+
+  const retryRefresh = async () => {
+    setError("");
+    try { await onRefresh(); setReloadKey((key) => key + 1); }
+    catch (reason) { setError(`Refresh failed: ${errorMessage(reason)}`); }
   };
 
   const inactiveUsers = state.users.filter((user) => user.status === "INACTIVE");
@@ -1447,7 +1458,7 @@ function BackupsPage({ state, onRefresh }: { state: PharmacyState; onRefresh: ()
   return (
     <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="flex items-center justify-between gap-3 border-b border-slate-100 p-4"><div><h2 className="text-sm font-bold text-slate-900">Database backups</h2><p className="mt-1 text-xs text-slate-500">{backups.length} recent backup records</p></div><button onClick={() => void createBackup()} disabled={creating} className="rounded-lg bg-teal-700 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{creating ? "Creating backup..." : "Create backup"}</button></div>
-      {error && <div role="alert" className="m-4 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{error}</div>}
+      {error && <div role="alert" className="m-4 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-rose-50 p-3 text-xs text-rose-700"><span>{error}</span><button onClick={() => void retryRefresh()} className="shrink-0 font-semibold underline">Retry refresh</button></div>}
       <div className="divide-y divide-slate-100">
         {loading && <div className="p-4 text-sm text-slate-500">Loading backup history...</div>}
         {!loading && backups.length === 0 && <div className="p-8 text-center text-sm text-slate-500">No backups have been requested.</div>}
