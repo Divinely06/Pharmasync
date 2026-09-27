@@ -75,17 +75,6 @@ app.use((req, res, next) => {
   next();
 });
 
-if (serverless) {
-  app.use((req, res, next) => {
-    res.on("finish", () => {
-      const closingPool = pool;
-      pool = createPool();
-      closingPool.end().catch(() => undefined);
-    });
-    next();
-  });
-}
-
 type SessionUser = { id: string; username: string; role: "ADMIN" | "PHARMACIST" | "CASHIER" };
 type AuthRequest = Request & { user?: SessionUser };
 const cookieToken = (req: Request) => req.headers.cookie?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${sessionCookie}=`))?.slice(sessionCookie.length + 1);
