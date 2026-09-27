@@ -37,8 +37,6 @@ import {
 type Page = "dashboard" | "pos" | "inventory" | "suppliers" | "users" | "audit" | "backups" | "reports";
 
 type CartItem = Medicine & { quantity: number };
-type BarcodeDetectorLike = { detect: (source: HTMLVideoElement) => Promise<{ rawValue: string }[]> };
-type BarcodeDetectorConstructor = new (options: { formats: string[] }) => BarcodeDetectorLike;
 
 const PIE_COLORS = ["#0d9488", "#6366f1", "#f59e0b", "#ec4899", "#22c55e"];
 const pharmaBackground = "/background-phar.jpg";
@@ -518,54 +516,65 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
 
   useEffect(() => {
     if (!scannerOpen) return;
-    let active = true;
-    let stream: MediaStream | null = null;
-    let animationFrame = 0;
-    const Detector = (window as Window & { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector;
-    if (!Detector || !navigator.mediaDevices?.getUserMedia) {
-      setScannerError("Camera barcode scanning is not supported here. Use a keyboard barcode scanner or type the code.");
-      return () => { active = false; };
-    }
 
-    const tryCamera = async (facingMode: "environment" | "user") => {
-      const camera = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facingMode } } });
-      if (!active) {
-        camera.getTracks().forEach((track) => track.stop());
-        return null;
+    let active = true;
+    let completed = false;
+
+    const stopStream = () => {
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
       }
-      stream = camera;
-      const video = videoRef.current;
-      if (!video) return camera;
-      video.srcObject = camera;
-      await video.play();
-      const detector = new Detector({ formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "qr_code"] });
-      const scan = async () => {
-        if (!active) return;
-        try {
-          const match = (await detector.detect(video))[0];
-          const rawValue = match?.rawValue ? normalizeBarcode(match.rawValue) : "";
-          if (rawValue) { setSearch(rawValue); setSearchPage(1); setScannerOpen(false); return; }
-        } catch {
-          setScannerError("Unable to read a barcode from this camera frame. Try moving the camera or scanning a clearer label.");
-        }
-        animationFrame = window.requestAnimationFrame(() => void scan());
-      };
-      void scan();
-      return camera;
     };
 
-    void tryCamera("environment")
-      .catch(() => tryCamera("user"))
-      .catch(() => {
-        if (!active) return;
-        setScannerError("Camera permission was denied or no webcam is available. You can still type the barcode manually.");
-      });
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setScannerError("Camera barcode scanning is not supported on this browser. Use a keyboard barcode scanner or type the code.");
+      return () => { active = false; stopStream(); };
+    }
+
+    void (async () => {
+      try {
+        const video = videoRef.current;
+        if (!video) {
+          setScannerError("The camera preview is unavailable right now. Please try again or type the barcode manually.");
+          return;
+        }
+
+        const { BrowserCodeReader, BrowserMultiFormatReader } = await import("@zxing/browser");
+        const devices = await BrowserCodeReader.listVideoInputDevices();
+        const preferred = devices.find((device) => /rear|environment|back/i.test(device.label)) ?? devices.find((device) => /front|user|face/i.test(device.label)) ?? devices[0];
+        if (!preferred) {
+          if (active) setScannerError("No webcam was detected. Please plug in a camera or type the barcode manually.");
+          return;
+        }
+
+        const reader = new BrowserMultiFormatReader();
+        const result = await reader.decodeOnceFromVideoDevice(preferred.deviceId, video);
+        if (!active || completed) return;
+        completed = true;
+
+        const rawValue = normalizeBarcode(result.getText());
+        if (rawValue) {
+          setSearch(rawValue);
+          setSearchPage(1);
+          setScannerOpen(false);
+          return;
+        }
+
+        setScannerError("Unable to read a barcode from this camera frame. Try moving the camera or type the code manually.");
+      } catch {
+        if (!active || completed) return;
+        setScannerError("Camera barcode scanning is not available here. Please use a keyboard barcode scanner or type the code manually.");
+      } finally {
+        if (active && !completed) {
+          stopStream();
+        }
+      }
+    })();
 
     return () => {
       active = false;
-      window.cancelAnimationFrame(animationFrame);
-      stream?.getTracks().forEach((track) => track.stop());
-      if (videoRef.current) videoRef.current.srcObject = null;
+      completed = true;
+      stopStream();
     };
   }, [scannerOpen]);
 
