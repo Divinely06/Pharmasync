@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPaymentProvider, DummyPaymentProvider } from "./payment-provider.js";
 
 const request = { saleId: "sale-1", amount: 100, currency: "PHP", method: "E_WALLET" as const, idempotencyKey: "checkout-1" };
@@ -30,8 +30,35 @@ describe("dummy payment provider", () => {
     expect((await paid.refundPayment(paidResult.providerReference!))?.status).toBe("REFUNDED");
   });
 
-  it("only selects a configured provider", () => {
+  it("supports both dummy and sandbox provider selection", () => {
     expect(createPaymentProvider("dummy")).toBeInstanceOf(DummyPaymentProvider);
     expect(() => createPaymentProvider("unknown")).toThrow(/not configured/);
+    expect(() => createPaymentProvider("sandbox")).not.toThrow();
+    expect(() => createPaymentProvider("paymongo")).not.toThrow();
+  });
+
+  it("creates a PayMongo payment intent when the provider is selected", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: { id: "pm_int_123", attributes: { status: "awaiting_payment_method" } },
+      }),
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+    process.env.PAYMONGO_SECRET_KEY = "test_secret_key";
+    process.env.PAYMONGO_BASE_URL = "https://api.paymongo.com/v1";
+
+    try {
+      const provider = createPaymentProvider("paymongo");
+      const result = await provider.createPayment(request);
+      expect(result.provider).toBe("PAYMONGO");
+      expect(result.providerReference).toBe("pm_int_123");
+      expect(fetchMock).toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete process.env.PAYMONGO_SECRET_KEY;
+      delete process.env.PAYMONGO_BASE_URL;
+    }
   });
 });

@@ -304,19 +304,19 @@ function SystemShell({
   return (
     <div className="app-shell flex h-screen min-h-screen bg-white text-slate-800">
       <aside className={`fixed inset-y-0 left-0 z-40 w-64 min-h-0 border-r border-slate-200 bg-white shadow-sm transition-transform duration-200 md:relative md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
-        <div className="flex h-24 items-center justify-center border-b border-slate-100 px-4 py-2">
+        <div className="flex h-20 items-center justify-center border-b border-slate-100 px-3 py-2">
           <div className="flex items-center justify-center">
-            <BrandMark className="h-20 w-40" />
+            <BrandMark className="h-16 w-32" />
           </div>
         </div>
 
-        <div className="mx-3 mt-4 rounded-2xl bg-gradient-to-r from-teal-600 to-cyan-600 p-4 text-white shadow-lg">
-          <div className="text-[10px] uppercase tracking-[0.22em] text-teal-100">Today</div>
-          <div className="mt-1 text-2xl font-bold">{fmt(todayRevenue)}</div>
-          <div className="mt-1 text-xs text-teal-100">Sales captured {state.sales.filter((sale) => dateKey(sale.transactionDate) === today()).length} transactions</div>
+        <div className="mx-3 mt-3 rounded-2xl bg-gradient-to-r from-teal-600 to-cyan-600 p-3.5 text-white shadow-lg">
+          <div className="text-[10px] uppercase tracking-[0.2em] text-teal-100">Today</div>
+          <div className="mt-1 text-xl font-bold">{fmt(todayRevenue)}</div>
+          <div className="mt-1 text-[11px] text-teal-100">Sales captured {state.sales.filter((sale) => dateKey(sale.transactionDate) === today()).length} transactions</div>
         </div>
 
-        <nav className="space-y-1 p-3">
+        <nav className="space-y-1 p-2.5">
           {visibleNav.map((item) => (
             <button
               key={item.id}
@@ -324,7 +324,7 @@ function SystemShell({
                 setPage(item.id);
                 setMobileOpen(false);
               }}
-              className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition ${page === item.id ? "bg-teal-50 text-teal-700" : "text-slate-600 hover:bg-slate-100"}`}
+              className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm font-medium transition ${page === item.id ? "bg-teal-50 text-teal-700" : "text-slate-600 hover:bg-slate-100"}`}
             >
               <span className="flex items-center gap-3">
                 <span className="text-current">{item.icon}</span>
@@ -335,10 +335,10 @@ function SystemShell({
           ))}
         </nav>
 
-        <div className="absolute bottom-0 left-0 right-0 border-t border-slate-200 bg-white p-4">
+        <div className="absolute bottom-0 left-0 right-0 border-t border-slate-200 bg-white p-3">
           <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-700 shrink-0">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-700">
                 {currentUser.fullName
                   .split(" ")
                   .map((part) => part[0])
@@ -347,10 +347,10 @@ function SystemShell({
               </div>
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-slate-800">{currentUser.fullName}</div>
-                <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{currentUser.role}</div>
+                <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">{currentUser.role}</div>
               </div>
             </div>
-            <button onClick={() => void logout()} disabled={loggingOut} aria-busy={loggingOut} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition-all duration-150 ease-out hover:bg-slate-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-70">
+            <button onClick={() => void logout()} disabled={loggingOut} aria-busy={loggingOut} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition-all duration-150 ease-out hover:bg-slate-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-70">
               {loggingOut ? (
                 <span className="inline-flex items-center gap-2">
                   <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" aria-hidden="true" />
@@ -365,20 +365,20 @@ function SystemShell({
       {mobileOpen && <div className="fixed inset-0 z-30 bg-black/30 md:hidden" onClick={() => setMobileOpen(false)} />}
 
       <main className="flex-1 min-h-0 overflow-hidden">
-        <header className="app-header flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 md:px-6">
+        <header className="app-header flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 md:px-5">
           <div className="flex items-center gap-3">
             <button onClick={() => setMobileOpen(true)} className="rounded-lg border border-slate-200 p-2 text-slate-600 md:hidden">
               <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4"><path d="M3 6h18v2H3V6Zm0 5h18v2H3v-2Zm0 5h18v2H3v-2Z" /></svg>
             </button>
             <div>
-              <div className="text-xl font-bold text-slate-900">{page === "dashboard" ? "Dashboard" : page === "pos" ? "Point of Sale" : page === "inventory" ? "Inventory" : page === "suppliers" ? "Suppliers" : page === "users" ? "Users" : page === "audit" ? "Audit Logs" : page === "backups" ? "Backups" : "Reports"}</div>
-              <div className="text-xs text-slate-500">Pharmacy operations overview</div>
+              <div className="text-lg font-bold tracking-tight text-slate-900">{page === "dashboard" ? "Dashboard" : page === "pos" ? "Point of Sale" : page === "inventory" ? "Inventory" : page === "suppliers" ? "Suppliers" : page === "users" ? "Users" : page === "audit" ? "Audit Logs" : page === "backups" ? "Backups" : "Reports"}</div>
+              <div className="text-[11px] text-slate-500">Pharmacy operations overview</div>
             </div>
           </div>
-          <div className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">System Online</div>
+          <div className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">System Online</div>
         </header>
 
-        <div className={`h-[calc(100%-73px)] min-h-0 overflow-y-auto overflow-x-hidden p-4 md:p-6 ${page === "dashboard" ? "dashboard-scroll" : ""}`}>
+        <div className={`h-[calc(100%-69px)] min-h-0 overflow-y-auto overflow-x-hidden p-4 md:p-5 ${page === "dashboard" ? "dashboard-scroll" : ""}`}>
           {page === "dashboard" && <DashboardPage state={state} onNavigate={navigate} onLowStock={showLowStock} onExpiringSoon={showExpiringSoon} />}
           {appError && <div role="alert" className="mb-4 flex items-center justify-between rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><span>{appError}</span><button onClick={() => void refreshData().then(() => setAppError("")).catch((error) => setAppError(errorMessage(error)))} className="font-semibold underline">Retry</button></div>}
           {page === "pos" && <PosPage state={state} onRefresh={refreshData} />}
@@ -1660,13 +1660,13 @@ function Field({ label, value, onChange, type = "text" }: { label: string; value
 
 function StatCard({ title, value, sub, icon, accent, onClick }: { title: string; value: string; sub: string; icon: React.ReactNode; accent: string; onClick?: () => void }) {
   return (
-    <button type="button" onClick={onClick} className="w-full rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-md focus-visible:border-teal-500">
-      <div className="flex items-start gap-4">
-        <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${accent}`}>{icon}</div>
-        <div>
-          <div className="text-xs font-medium text-slate-500">{title}</div>
-          <div className="mt-1 text-2xl font-bold text-slate-900">{value}</div>
-          <div className="mt-1 text-xs text-slate-500">{sub}</div>
+    <button type="button" onClick={onClick} className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-md focus-visible:border-teal-500">
+      <div className="flex items-center gap-3">
+        <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${accent}`}>{icon}</div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{title}</div>
+          <div className="mt-1 text-xl font-bold leading-none text-slate-900">{value}</div>
+          <div className="mt-1 text-[11px] text-slate-500">{sub}</div>
         </div>
       </div>
     </button>
