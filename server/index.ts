@@ -11,7 +11,7 @@ import { auditFilterSchema, inventoryMovementSchema, isRequestOriginAllowed, lis
 import { allocateFefo } from "./inventory.js";
 import { createLogicalBackup, dumpDatabase } from "./backup.js";
 import { createPaymentProvider, type PaymentStatus } from "./payment-provider.js";
-import { normalizeDatabaseUrl } from "./db.js";
+import { applyDatabaseSchema, normalizeDatabaseUrl } from "./db.js";
 
 const connectionString = normalizeDatabaseUrl(process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI ?? "");
 if (!connectionString) throw new Error("DATABASE_URL is required");
@@ -33,6 +33,16 @@ const sessionCookie = "pharmasync_session";
 const sessionLifetime = 8 * 60 * 60 * 1000;
 const production = process.env.NODE_ENV === "production";
 app.disable("x-powered-by");
+app.use((req, res, next) => {
+  res.setHeader("Permissions-Policy", "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  next();
+});
+if (!process.env.VERCEL) {
+  await applyDatabaseSchema(pool).catch((error) => {
+    console.error("Database schema sync failed", error);
+  });
+}
 const logError = (event: string, error: unknown) => {
   const message = error instanceof Error ? error.message : "Unknown error";
   const redactedMessage = message

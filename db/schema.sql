@@ -46,6 +46,11 @@ CREATE TABLE IF NOT EXISTS medicine_batches (
   UNIQUE (medicine_id, batch_number)
 );
 
+ALTER TABLE medicine_batches ALTER COLUMN created_at SET DEFAULT now();
+ALTER TABLE medicine_batches ALTER COLUMN updated_at SET DEFAULT now();
+UPDATE medicine_batches SET created_at = now() WHERE created_at IS NULL;
+UPDATE medicine_batches SET updated_at = now() WHERE updated_at IS NULL;
+
 INSERT INTO medicine_batches (id,medicine_id,batch_number,expiration_date,quantity)
 SELECT 'batch-' || id,id,batch_number,expiration_date,quantity FROM medicines
 ON CONFLICT DO NOTHING;
