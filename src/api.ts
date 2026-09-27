@@ -65,6 +65,7 @@ export const api = {
   session: () => request<{ user: PharmacyUser }>("/session"),
   login: (username: string, password: string) => request<{ user: PharmacyUser }>("/login", { method: "POST", body: JSON.stringify({ username, password }) }),
   logout: () => request<{ ok: true }>("/logout", { method: "POST" }),
+  changePassword: (currentPassword: string, newPassword: string) => request<{ ok: true }>("/account/password", { method: "POST", body: JSON.stringify({ currentPassword, newPassword }) }),
   state: () => request<PharmacyState>("/state"),
   audit: (filters: { page: number; pageSize: number; actor: string; action: string; entityType: string; search: string }) => request<{ logs: AuditLog[]; page: number; pageSize: number; total: number; totalPages: number }>(`/audit?${new URLSearchParams({ page: String(filters.page), pageSize: String(filters.pageSize), actor: filters.actor, action: filters.action, entityType: filters.entityType, search: filters.search })}`),
   reports: (filters: { from?: string; to?: string } = {}) => request<ReportData>(`/reports${reportQuery(filters)}`),

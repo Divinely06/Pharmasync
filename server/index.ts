@@ -7,16 +7,18 @@ import { Pool, type PoolClient } from "pg";
 import bcrypt from "bcryptjs";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
-import { auditFilterSchema, inventoryMovementSchema, isRequestOriginAllowed, listFilterSchema, loginSchema, medicineSchema, medicineUpdateSchema, passwordResetSchema, purchaseSchema, reportFilterSchema, saleSchema, supplierSchema, userCreateSchema, userUpdateSchema } from "./validation.js";
+import { auditFilterSchema, inventoryMovementSchema, isRequestOriginAllowed, listFilterSchema, loginSchema, medicineSchema, medicineUpdateSchema, passwordChangeSchema, passwordResetSchema, purchaseSchema, reportFilterSchema, saleSchema, sessionTokenSchema, supplierSchema, userCreateSchema, userUpdateSchema } from "./validation.js";
 import { allocateFefo } from "./inventory.js";
 import { createLogicalBackup, dumpDatabase } from "./backup.js";
 import { createPaymentProvider, type PaymentStatus } from "./payment-provider.js";
-import { applyDatabaseSchema, normalizeDatabaseUrl } from "./db.js";
+import { applyDatabaseSchema, missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from "./db.js";
 
 const connectionString = normalizeDatabaseUrl(process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI ?? "");
 if (!connectionString) throw new Error("DATABASE_URL is required");
 const businessTimeZone = "Asia/Manila";
 const serverless = Boolean(process.env.VERCEL);
+const production = process.env.NODE_ENV === "production";
+const allowSimulatedPayments = !production || process.env.ALLOW_SIMULATED_PAYMENTS === "true";
 function createPool() {
   return new Pool({
     connectionString,
@@ -33,18 +35,14 @@ const paymentProvider = createPaymentProvider();
 const app = express();
 const sessionCookie = "pharmasync_session";
 const sessionLifetime = 8 * 60 * 60 * 1000;
-const production = process.env.NODE_ENV === "production";
 app.disable("x-powered-by");
+app.use(helmet());
 app.use((req, res, next) => {
   res.setHeader("Permissions-Policy", "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   next();
 });
-if (!process.env.VERCEL) {
-  await applyDatabaseSchema(pool).catch((error) => {
-    console.error("Database schema sync failed", error);
-  });
-}
+if (!process.env.VERCEL) await applyDatabaseSchema(pool);
 const logError = (event: string, error: unknown) => {
   const message = error instanceof Error ? error.message : "Unknown error";
   const redactedMessage = message
@@ -57,8 +55,9 @@ app.use(express.json({ limit: "64kb" }));
 app.use((req, res, next) => {
   const origin = req.header("Origin");
   const allowedOrigin = process.env.CLIENT_ORIGIN;
-  if (!isRequestOriginAllowed(req.method, origin, allowedOrigin, production, req.headers.host)) return res.status(403).json({ code: "ORIGIN_REJECTED", error: "Request origin is not allowed" });
-  if (origin && allowedOrigin && origin === allowedOrigin) {
+  if (!isRequestOriginAllowed(req.method, origin, allowedOrigin, production)) return res.status(403).json({ code: "ORIGIN_REJECTED", error: "Request origin is not allowed" });
+  const configuredOrigins = (allowedOrigin ?? "").split(",").map((entry) => entry.trim().replace(/\/$/, ""));
+  if (origin && configuredOrigins.includes(origin.replace(/\/$/, ""))) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Vary", "Origin");
@@ -82,8 +81,8 @@ const hashToken = (token: string) => createHash("sha256").update(token).digest("
 const auth = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const token = cookieToken(req);
-    if (!token) return res.status(401).json({ code: "UNAUTHORIZED", error: "Authentication required" });
-    const result = await pool.query("SELECT u.id, u.username, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > now() AND u.status = 'ACTIVE'", [hashToken(decodeURIComponent(token))]);
+    if (!token || !sessionTokenSchema.safeParse(token).success) return res.status(401).json({ code: "UNAUTHORIZED", error: "Authentication required" });
+    const result = await pool.query("SELECT u.id, u.username, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > now() AND u.status = 'ACTIVE'", [hashToken(token)]);
     if (!result.rowCount) return res.status(401).json({ code: "UNAUTHORIZED", error: "Authentication required" });
     req.user = result.rows[0] as SessionUser;
     next();
@@ -108,7 +107,12 @@ const validText = (value: unknown, max = 250) => typeof value === "string" && va
 const safeUserSelect = 'SELECT id, username, full_name AS "fullName", role, email, status, created_at AS "createdAt", updated_at AS "updatedAt", last_login AS "lastLogin" FROM users';
 
 app.get("/api/health", async (_req, res) => {
-  try { await pool.query("SELECT 1"); res.json({ ok: true, database: "postgresql" }); }
+  try {
+    const result = await pool.query("SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name=ANY($1::text[])", [requiredDatabaseTables]);
+    const missingTables = missingDatabaseTables(result.rows.map((row) => row.table_name));
+    if (missingTables.length) return res.status(503).json({ ok: false, code: "SCHEMA_NOT_READY", error: "Database schema is incomplete; run pnpm db:migrate", missingTables });
+    res.json({ ok: true, database: "postgresql" });
+  }
   catch (error) {
     logError("database_health_check_failed", error);
     if ((error as { code?: string }).code === "53300") return res.status(503).json({ ok: false, code: "DATABASE_BUSY", error: "Database connection capacity is exhausted" });
@@ -149,11 +153,35 @@ app.post("/api/logout", auth, async (req: AuthRequest, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query("DELETE FROM sessions WHERE token_hash = $1", [hashToken(decodeURIComponent(token))]);
+    await client.query("DELETE FROM sessions WHERE token_hash = $1", [hashToken(token)]);
     await audit(client, req.user!.id, "LOGOUT", "USER", req.user!.id, { username: req.user!.username });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   res.clearCookie(sessionCookie, { httpOnly: true, secure: production, sameSite: "lax", path: "/" });
+  res.json({ ok: true });
+});
+
+app.post("/api/account/password", auth, async (req: AuthRequest, res) => {
+  const parsed = passwordChangeSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_INPUT", error: "New password must be at least 10 characters and no more than 72 UTF-8 bytes" });
+  const token = cookieToken(req)!;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const user = await client.query("SELECT password_hash FROM users WHERE id=$1 AND status='ACTIVE' FOR UPDATE", [req.user!.id]);
+    if (!user.rowCount || !(await bcrypt.compare(parsed.data.currentPassword, user.rows[0].password_hash))) {
+      await client.query("ROLLBACK");
+      return res.status(401).json({ code: "INVALID_CREDENTIALS", error: "Current password is incorrect" });
+    }
+    if (parsed.data.currentPassword === parsed.data.newPassword) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ code: "PASSWORD_UNCHANGED", error: "Choose a different password" });
+    }
+    await client.query("UPDATE users SET password_hash=$2,updated_at=now() WHERE id=$1", [req.user!.id, await bcrypt.hash(parsed.data.newPassword, 12)]);
+    await client.query("DELETE FROM sessions WHERE user_id=$1 AND token_hash<>$2", [req.user!.id, hashToken(token)]);
+    await audit(client, req.user!.id, "CHANGE_OWN_PASSWORD", "USER", req.user!.id, { otherSessionsRevoked: true });
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   res.json({ ok: true });
 });
 
@@ -398,7 +426,7 @@ app.delete("/api/suppliers/:id", auth, allow("ADMIN", "PHARMACIST"), async (req:
 });
 app.post("/api/users", auth, allow("ADMIN"), async (req: AuthRequest, res) => {
   const parsed = userCreateSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_INPUT", error: "User details are invalid; passwords must be at least 10 characters" });
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_INPUT", error: "User details are invalid; passwords must be at least 10 characters and no more than 72 UTF-8 bytes" });
   const b = parsed.data;
   const id = `u-${randomUUID()}`;
   const client = await pool.connect();
@@ -463,7 +491,7 @@ app.post("/api/users/:id/restore", auth, allow("ADMIN"), async (req: AuthRequest
 app.post("/api/users/:id/reset-password", auth, allow("ADMIN"), async (req: AuthRequest, res) => {
   if (req.params.id === req.user!.id) return res.status(409).json({ code: "SELF_PASSWORD_RESET", error: "Use the account recovery flow to change your own password" });
   const parsed = passwordResetSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ code: "INVALID_INPUT", error: "Password must be at least 10 characters" });
+  if (!parsed.success) return res.status(400).json({ code: "INVALID_INPUT", error: "Password must be at least 10 characters and no more than 72 UTF-8 bytes" });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -597,6 +625,7 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
   const parsed = saleSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_INPUT", error: "Sale details are invalid" });
   const body = parsed.data;
+  if (body.paymentMethod !== "Cash" && !allowSimulatedPayments) return res.status(503).json({ code: "SIMULATED_PAYMENT_DISABLED", error: "Cashless demo payments are disabled in production" });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");

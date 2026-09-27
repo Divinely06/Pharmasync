@@ -117,11 +117,17 @@ function App() {
 
   const loginUser = async () => {
     setLoginError("");
+    let loginSucceeded = false;
     try {
       const { user } = await api.login(login.username, login.password);
+      loginSucceeded = true;
+      const loaded = hydrateState(await api.state());
+      setState(loaded);
       setAuthUser(user);
-      await refreshData();
     } catch (error) {
+      if (loginSucceeded) await api.logout().catch(() => undefined);
+      setAuthUser(null);
+      setState(emptyState);
       setLoginError(errorMessage(error));
     }
   };
@@ -269,6 +275,30 @@ function SystemShell({
   showLowStock: () => void;
   showExpiringSoon: () => void;
 }) {
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordNotice, setPasswordNotice] = useState("");
+  const [savingPassword, setSavingPassword] = useState(false);
+
+  const changePassword = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setPasswordError("");
+    setPasswordNotice("");
+    setSavingPassword(true);
+    try {
+      await api.changePassword(currentPassword, newPassword);
+      setCurrentPassword("");
+      setNewPassword("");
+      setPasswordNotice("Password updated. Other active sessions were signed out.");
+    } catch (error) {
+      setPasswordError(errorMessage(error));
+    } finally {
+      setSavingPassword(false);
+    }
+  };
+
   return (
     <div className="app-shell flex h-screen bg-white text-slate-800">
       <aside className={`fixed inset-y-0 left-0 z-40 w-64 border-r border-slate-200 bg-white shadow-sm transition-transform duration-200 md:relative md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
@@ -316,6 +346,7 @@ function SystemShell({
               <div>
                 <div className="text-sm font-semibold text-slate-800">{currentUser.fullName}</div>
                 <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{currentUser.role}</div>
+                <button onClick={() => { setPasswordDialogOpen(true); setPasswordError(""); setPasswordNotice(""); }} className="mt-1 text-[10px] font-semibold text-teal-700 underline">Change password</button>
               </div>
             </div>
             <button onClick={logout} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100">Logout</button>
@@ -351,6 +382,7 @@ function SystemShell({
           {page === "reports" && <ReportsPage state={state} />}
         </div>
       </main>
+      {passwordDialogOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"><form onSubmit={(event) => void changePassword(event)} className="w-full max-w-sm space-y-4 rounded-2xl bg-white p-6 shadow-2xl"><div><h2 className="text-lg font-bold text-slate-900">Change password</h2><p className="mt-1 text-xs text-slate-500">Use at least 10 characters and no more than 72 UTF-8 bytes.</p></div><Field label="Current password" type="password" value={currentPassword} onChange={setCurrentPassword} /><Field label="New password" type="password" value={newPassword} onChange={setNewPassword} />{passwordError && <div role="alert" className="rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{passwordError}</div>}{passwordNotice && <div role="status" className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-800">{passwordNotice}</div>}<div className="flex justify-end gap-3"><button type="button" onClick={() => { setPasswordDialogOpen(false); setCurrentPassword(""); setNewPassword(""); }} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700">Close</button><button type="submit" disabled={savingPassword || !currentPassword || !newPassword} className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{savingPassword ? "Saving..." : "Update password"}</button></div></form></div>}
     </div>
   );
 }
@@ -573,17 +605,9 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   const removeFromCart = (medicineId: string) => setCart((prev) => prev.filter((item) => item.id !== medicineId));
 
   const completeSale = async (saleId: string) => {
-    const loaded = await onRefresh();
-    const sale = loaded.sales.find((entry) => entry.id === saleId);
-    if (!sale) throw new Error("The sale was completed, but its receipt details could not be loaded.");
-    setReceipt({
-      ...sale,
-      paymentStatus: sale.status === "COMPLETED" ? "PAID" : sale.status,
-      provider: null,
-      providerReference: null,
-      simulated: false,
-      items: sale.items.map((item) => ({ ...item, batches: [] })),
-    });
+    const sale = await api.receipt(saleId);
+    setReceipt(sale);
+    void onRefresh().catch(() => undefined);
     setPendingPayment(null);
     setCart([]);
     setDiscount("0");
@@ -641,9 +665,9 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
       });
       if (result.status === "PENDING") {
         if (!result.paymentId) throw new Error("Pending payment did not return a payment reference.");
-        await onRefresh();
         setPendingPayment({ saleId: result.id, paymentId: result.paymentId });
         setSaleError("Payment is pending. Do not submit the order again; stock has not changed.");
+        void onRefresh().catch(() => undefined);
         return;
       }
       await completeSale(result.id);

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canAccess, buildAuditLog, calculateTotals, dateKey, matchesMedicineCategory } from './data';
 import { api } from './api';
-import { normalizeDatabaseUrl } from '../server/db';
-import { isRequestOriginAllowed, medicineSchema, saleSchema } from '../server/validation';
+import { missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from '../server/db';
+import { isRequestOriginAllowed, loginSchema, medicineSchema, passwordChangeSchema, passwordResetSchema, saleSchema, sessionTokenSchema, userCreateSchema } from '../server/validation';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -72,6 +72,12 @@ describe('pharmacy system logic', () => {
     expect(normalizeDatabaseUrl('postgres://user:pass@host:5432/app')).toBe('postgres://user:pass@host:5432/app');
   });
 
+  it('reports missing required database tables for readiness checks', () => {
+    expect(missingDatabaseTables(requiredDatabaseTables)).toEqual([]);
+    expect(missingDatabaseTables(['users', 'sessions'])).not.toContain('users');
+    expect(missingDatabaseTables(['users', 'sessions'])).toContain('medicines');
+  });
+
 });
 
 describe('typed API client', () => {
@@ -104,9 +110,32 @@ describe('typed API client', () => {
     await api.salesReportCsv({ from: '', to: '' });
     expect(fetchMock).toHaveBeenLastCalledWith('/api/reports/sales.csv', expect.objectContaining({ credentials: 'same-origin' }));
   });
+
+  it('returns a clean invalid result for malformed session cookie tokens', () => {
+    expect(sessionTokenSchema.safeParse('a'.repeat(64)).success).toBe(true);
+    expect(sessionTokenSchema.safeParse('%E0%A4%A').success).toBe(false);
+    expect(sessionTokenSchema.safeParse('short').success).toBe(false);
+  });
 });
 
 describe('write request validation', () => {
+  it('normalizes usernames and rejects passwords beyond bcrypt byte capacity', () => {
+    const user = { username: ' Cashier ', fullName: 'Example Cashier', email: 'cashier@example.test', password: 'valid-password', role: 'CASHIER' };
+    expect(userCreateSchema.parse(user).username).toBe('cashier');
+    expect(userCreateSchema.safeParse({ ...user, password: 'a'.repeat(73) }).success).toBe(false);
+    expect(passwordResetSchema.safeParse({ password: 'a'.repeat(73) }).success).toBe(false);
+    expect(loginSchema.safeParse({ username: 'cashier', password: 'a'.repeat(73) }).success).toBe(false);
+    expect(userCreateSchema.safeParse({ ...user, password: '界'.repeat(24) }).success).toBe(true);
+    expect(userCreateSchema.safeParse({ ...user, password: '界'.repeat(25) }).success).toBe(false);
+  });
+
+  it('requires current and bcrypt-compatible new passwords for self-service changes', () => {
+    expect(passwordChangeSchema.safeParse({ currentPassword: 'old-password', newPassword: 'new-password' }).success).toBe(true);
+    expect(passwordChangeSchema.safeParse({ currentPassword: '', newPassword: 'new-password' }).success).toBe(false);
+    expect(passwordChangeSchema.safeParse({ currentPassword: 'old-password', newPassword: 'short' }).success).toBe(false);
+    expect(passwordChangeSchema.safeParse({ currentPassword: 'old-password', newPassword: 'x'.repeat(73) }).success).toBe(false);
+  });
+
   it('rejects non-positive sale quantities and missing idempotency keys', () => {
     expect(saleSchema.safeParse({ items: [{ medicineId: 'med-1', quantity: 0 }], paymentMethod: 'Cash' }).success).toBe(false);
     expect(saleSchema.safeParse({ items: [{ medicineId: 'med-1', quantity: 1 }], paymentMethod: 'Cash' }).success).toBe(false);
@@ -148,14 +177,14 @@ describe('production request origin policy', () => {
     expect(isRequestOriginAllowed('POST', 'https://attacker.example', allowedOrigin, true)).toBe(false);
   });
 
-  it('allows local preview hosts used by dev environments and Codespaces', () => {
-    expect(isRequestOriginAllowed('POST', 'http://localhost:4175', 'http://localhost:4175', true)).toBe(true);
-    expect(isRequestOriginAllowed('POST', 'http://127.0.0.1:4175', 'http://localhost:4175', true)).toBe(true);
-    expect(isRequestOriginAllowed('POST', 'https://verbose-funicular-4qv6r576x76xf5r5q-4175.app.github.dev', 'http://localhost:4175', true)).toBe(true);
+  it('requires preview host origins to be configured for production writes', () => {
+    const previewOrigin = 'https://verbose-funicular-4qv6r576x76xf5r5q-4175.app.github.dev';
+    expect(isRequestOriginAllowed('POST', previewOrigin, 'http://localhost:4175', true)).toBe(false);
+    expect(isRequestOriginAllowed('POST', previewOrigin, `http://localhost:4175,${previewOrigin}`, true)).toBe(true);
   });
 
-  it('allows same-host production requests when CLIENT_ORIGIN is not configured', () => {
-    expect(isRequestOriginAllowed('POST', 'https://pharmasync-hopemed.vercel.app', undefined, true, 'pharmasync-hopemed.vercel.app')).toBe(true);
-    expect(isRequestOriginAllowed('POST', 'https://evil.example', undefined, true, 'pharmasync-hopemed.vercel.app')).toBe(false);
+  it('requires a configured origin for production writes', () => {
+    expect(isRequestOriginAllowed('POST', 'https://pharmasync-hopemed.vercel.app', undefined, true)).toBe(false);
+    expect(isRequestOriginAllowed('POST', 'https://pharmasync-hopemed.vercel.app', 'https://pharmasync-hopemed.vercel.app', true)).toBe(true);
   });
 });

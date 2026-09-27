@@ -4,23 +4,12 @@ const requiredText = (max = 250) => z.string().trim().min(1).max(max);
 const optionalText = (max = 1000) => z.string().max(max).optional().default("");
 const nonNegativeMoney = z.coerce.number().finite().nonnegative().refine((value) => Math.round(value * 100) / 100 === value);
 const nonNegativeInteger = z.coerce.number().int().nonnegative();
+const bcryptCompatiblePassword = (minimumLength: number) => z.string().min(minimumLength).max(256).refine((value) => Buffer.byteLength(value, "utf8") <= 72, "Password must not exceed 72 UTF-8 bytes");
 
 const normalizeOrigin = (value: string | undefined) => value ? value.replace(/\/$/, "") : value;
-const isPreviewHost = (hostname: string) => hostname === "localhost" || hostname === "127.0.0.1" || hostname.endsWith(".app.github.dev") || hostname.endsWith(".preview.app.github.dev");
-const hostFromRequest = (requestHost: string | undefined) => {
-  if (!requestHost) return undefined;
-  const candidate = requestHost.includes(":") && !requestHost.startsWith("[") ? `https://${requestHost}` : `https://${requestHost}`;
-  try {
-    return new URL(candidate);
-  } catch {
-    return undefined;
-  }
-};
 
-export const isRequestOriginAllowed = (method: string, origin: string | undefined, allowedOrigin: string | undefined, production: boolean, requestHost?: string) => {
+export const isRequestOriginAllowed = (method: string, origin: string | undefined, allowedOrigin: string | undefined, production: boolean) => {
   const normalizedOrigin = normalizeOrigin(origin);
-  const normalizedAllowed = normalizeOrigin(allowedOrigin);
-  const requestUrl = hostFromRequest(requestHost);
 
   if (!production) return true;
 
@@ -29,52 +18,19 @@ export const isRequestOriginAllowed = (method: string, origin: string | undefine
     return false;
   }
 
-  if (normalizedAllowed) {
-    const configuredOrigins = normalizedAllowed
-      .split(",")
-      .map((entry) => normalizeOrigin(entry.trim()))
-      .filter((entry): entry is string => Boolean(entry));
-    if (configuredOrigins.includes(normalizedOrigin)) return true;
-
-    try {
-      const originUrl = new URL(normalizedOrigin);
-      const isEquivalentLocalhost = configuredOrigins.some((configured) => {
-        try {
-          const configuredUrl = new URL(configured);
-          return configuredUrl.hostname === originUrl.hostname && configuredUrl.port === originUrl.port;
-        } catch {
-          return false;
-        }
-      });
-      if (isEquivalentLocalhost) return true;
-    } catch {
-      // ignore invalid origins; falls through to preview-host allowance below
-    }
-  }
-
-  if (requestUrl) {
-    try {
-      const originUrl = new URL(normalizedOrigin);
-      if (originUrl.hostname === requestUrl.hostname && originUrl.port === requestUrl.port) return true;
-    } catch {
-      // invalid origin
-    }
-  }
-
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return true;
-
-  try {
-    const originUrl = new URL(normalizedOrigin);
-    return isPreviewHost(originUrl.hostname);
-  } catch {
-    return false;
-  }
+  const configuredOrigins = (allowedOrigin ?? "")
+    .split(",")
+    .map((entry) => normalizeOrigin(entry.trim()))
+    .filter((entry): entry is string => Boolean(entry));
+  return configuredOrigins.includes(normalizedOrigin);
 };
 
 export const loginSchema = z.object({
   username: requiredText(100),
-  password: z.string().min(1).max(256),
+  password: bcryptCompatiblePassword(1),
 });
+export const sessionTokenSchema = z.string().regex(/^[a-f0-9]{64}$/i);
 
 export const medicineSchema = z.object({
   barcode: requiredText(100),
@@ -107,10 +63,10 @@ export const supplierSchema = z.object({
 });
 
 export const userCreateSchema = z.object({
-  username: requiredText(100),
+  username: requiredText(100).transform((username) => username.toLowerCase()),
   fullName: requiredText(200),
   email: z.string().email().max(254),
-  password: z.string().min(10).max(256),
+  password: bcryptCompatiblePassword(10),
   role: z.enum(["ADMIN", "PHARMACIST", "CASHIER"]),
 });
 
@@ -120,7 +76,11 @@ export const userUpdateSchema = z.object({
   role: z.enum(["ADMIN", "PHARMACIST", "CASHIER"]),
 });
 
-export const passwordResetSchema = z.object({ password: z.string().min(10).max(256) });
+export const passwordResetSchema = z.object({ password: bcryptCompatiblePassword(10) });
+export const passwordChangeSchema = z.object({
+  currentPassword: bcryptCompatiblePassword(1),
+  newPassword: bcryptCompatiblePassword(10),
+});
 
 export const saleSchema = z.object({
   items: z.array(z.object({ medicineId: requiredText(100), quantity: z.coerce.number().int().positive() })).min(1).max(100).refine((items) => new Set(items.map((item) => item.medicineId)).size === items.length, "Each medicine may only appear once"),

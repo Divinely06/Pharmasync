@@ -52,7 +52,13 @@ UPDATE medicine_batches SET created_at = now() WHERE created_at IS NULL;
 UPDATE medicine_batches SET updated_at = now() WHERE updated_at IS NULL;
 
 INSERT INTO medicine_batches (id,medicine_id,batch_number,expiration_date,quantity)
-SELECT 'batch-' || id,id,batch_number,expiration_date,quantity FROM medicines
+SELECT 'batch-' || seed.id,seed.id,seed.batch_number,seed.expiration_date,seed.quantity
+FROM (
+  SELECT DISTINCT ON (id) id,batch_number,expiration_date,quantity
+  FROM medicines
+  ORDER BY id,created_at,ctid
+) AS seed
+WHERE NOT EXISTS (SELECT 1 FROM medicine_batches existing WHERE existing.id='batch-' || seed.id)
 ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS sales (
@@ -127,6 +133,7 @@ CREATE TABLE IF NOT EXISTS payment_events (
 INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata)
 SELECT 'payment-event-migrated-' || p.id,p.id,NULL,p.status,'MIGRATED_ATTEMPT',s.cashier_id,'{}'::jsonb
 FROM payment_records p JOIN sales s ON s.id=p.sale_id
+WHERE NOT EXISTS (SELECT 1 FROM payment_events existing WHERE existing.id='payment-event-migrated-' || p.id)
 ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS backup_history (
@@ -172,6 +179,133 @@ CREATE TABLE IF NOT EXISTS inventory_transactions (
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id), action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(), metadata JSONB NOT NULL DEFAULT '{}'::jsonb, success BOOLEAN NOT NULL
 );
+
+UPDATE users SET status='INACTIVE' WHERE status IS NULL;
+UPDATE suppliers SET status='INACTIVE' WHERE status IS NULL;
+UPDATE medicines SET status='INACTIVE' WHERE status IS NULL;
+
+WITH safe_ids AS (
+  SELECT id FROM users WHERE id IS NOT NULL GROUP BY id
+  HAVING count(*) > 1 AND count(DISTINCT (username,full_name,email,role)) = 1
+), ranked AS (
+  SELECT ctid,row_number() OVER (PARTITION BY id ORDER BY (status='ACTIVE') DESC,created_at ASC,ctid ASC) AS duplicate_rank
+  FROM users WHERE id IN (SELECT id FROM safe_ids)
+)
+DELETE FROM users duplicate USING ranked WHERE duplicate.ctid=ranked.ctid AND ranked.duplicate_rank>1;
+
+WITH safe_ids AS (
+  SELECT id FROM suppliers WHERE id IS NOT NULL GROUP BY id
+  HAVING count(*) > 1 AND count(DISTINCT (supplier_name,contact_person,phone,email,address)) = 1
+), ranked AS (
+  SELECT ctid,row_number() OVER (PARTITION BY id ORDER BY (status='ACTIVE') DESC,created_at ASC,ctid ASC) AS duplicate_rank
+  FROM suppliers WHERE id IN (SELECT id FROM safe_ids)
+)
+DELETE FROM suppliers duplicate USING ranked WHERE duplicate.ctid=ranked.ctid AND ranked.duplicate_rank>1;
+
+WITH safe_ids AS (
+  SELECT id FROM medicines WHERE id IS NOT NULL GROUP BY id
+  HAVING count(*) > 1 AND count(DISTINCT (barcode,generic_name,brand_name,medicine_type,dosage_form,strength,prescription_required,description,dosage_information,precautions,contraindications,storage_information,supplier_id,unit_price,reorder_level,expiration_date,batch_number)) = 1
+), ranked AS (
+  SELECT ctid,row_number() OVER (PARTITION BY id ORDER BY (status='ACTIVE') DESC,created_at ASC,ctid ASC) AS duplicate_rank
+  FROM medicines WHERE id IN (SELECT id FROM safe_ids)
+)
+DELETE FROM medicines duplicate USING ranked WHERE duplicate.ctid=ranked.ctid AND ranked.duplicate_rank>1;
+
+WITH safe_ids AS (
+  SELECT id FROM medicine_batches WHERE id IS NOT NULL GROUP BY id
+  HAVING count(*) > 1 AND count(DISTINCT (medicine_id,batch_number,expiration_date)) = 1
+), ranked AS (
+  SELECT ctid,row_number() OVER (PARTITION BY id ORDER BY created_at ASC,ctid ASC) AS duplicate_rank
+  FROM medicine_batches WHERE id IN (SELECT id FROM safe_ids)
+)
+DELETE FROM medicine_batches duplicate USING ranked WHERE duplicate.ctid=ranked.ctid AND ranked.duplicate_rank>1;
+
+DO $primary_keys$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.users'::regclass AND contype='p') THEN ALTER TABLE users ADD CONSTRAINT users_pkey PRIMARY KEY (id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sessions'::regclass AND contype='p') THEN ALTER TABLE sessions ADD CONSTRAINT sessions_pkey PRIMARY KEY (token_hash); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.suppliers'::regclass AND contype='p') THEN ALTER TABLE suppliers ADD CONSTRAINT suppliers_pkey PRIMARY KEY (id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.medicines'::regclass AND contype='p') THEN ALTER TABLE medicines ADD CONSTRAINT medicines_pkey PRIMARY KEY (id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.medicine_batches'::regclass AND contype='p') THEN ALTER TABLE medicine_batches ADD CONSTRAINT medicine_batches_pkey PRIMARY KEY (id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sales'::regclass AND contype='p') THEN ALTER TABLE sales ADD CONSTRAINT sales_pkey PRIMARY KEY (id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.purchases'::regclass AND contype='p') THEN ALTER TABLE purchases ADD CONSTRAINT purchases_pkey PRIMARY KEY (id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.purchase_items'::regclass AND contype='p') THEN ALTER TABLE purchase_items ADD CONSTRAINT purchase_items_pkey PRIMARY KEY (id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_records'::regclass AND contype='p') THEN ALTER TABLE payment_records ADD CONSTRAINT payment_records_pkey PRIMARY KEY (id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_events'::regclass AND contype='p') THEN ALTER TABLE payment_events ADD CONSTRAINT payment_events_pkey PRIMARY KEY (id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.backup_history'::regclass AND contype='p') THEN ALTER TABLE backup_history ADD CONSTRAINT backup_history_pkey PRIMARY KEY (id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.schema_migrations'::regclass AND contype='p') THEN ALTER TABLE schema_migrations ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (version); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sale_items'::regclass AND contype='p') THEN ALTER TABLE sale_items ADD CONSTRAINT sale_items_pkey PRIMARY KEY (id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sale_item_batches'::regclass AND contype='p') THEN ALTER TABLE sale_item_batches ADD CONSTRAINT sale_item_batches_pkey PRIMARY KEY (sale_item_id,batch_id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.inventory_transactions'::regclass AND contype='p') THEN ALTER TABLE inventory_transactions ADD CONSTRAINT inventory_transactions_pkey PRIMARY KEY (id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.audit_logs'::regclass AND contype='p') THEN ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_pkey PRIMARY KEY (id); END IF;
+END;
+$primary_keys$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS users_active_username_lower_uidx ON users (lower(username)) WHERE status='ACTIVE';
+CREATE UNIQUE INDEX IF NOT EXISTS users_active_email_lower_uidx ON users (lower(email)) WHERE status='ACTIVE';
+CREATE UNIQUE INDEX IF NOT EXISTS medicines_barcode_uidx ON medicines (barcode);
+CREATE UNIQUE INDEX IF NOT EXISTS medicine_batches_medicine_batch_uidx ON medicine_batches (medicine_id,batch_number);
+CREATE UNIQUE INDEX IF NOT EXISTS sales_idempotency_key_uidx ON sales (idempotency_key);
+CREATE UNIQUE INDEX IF NOT EXISTS purchases_reference_number_uidx ON purchases (reference_number);
+CREATE UNIQUE INDEX IF NOT EXISTS payment_records_provider_reference_uidx ON payment_records (provider_reference);
+CREATE UNIQUE INDEX IF NOT EXISTS payment_records_idempotency_key_uidx ON payment_records (idempotency_key);
+
+DO $foreign_keys$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sessions'::regclass AND conname='sessions_user_id_fkey') THEN ALTER TABLE sessions ADD CONSTRAINT sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.medicines'::regclass AND conname='medicines_supplier_id_fkey') THEN ALTER TABLE medicines ADD CONSTRAINT medicines_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES suppliers(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.medicine_batches'::regclass AND conname='medicine_batches_medicine_id_fkey') THEN ALTER TABLE medicine_batches ADD CONSTRAINT medicine_batches_medicine_id_fkey FOREIGN KEY (medicine_id) REFERENCES medicines(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sales'::regclass AND conname='sales_cashier_id_fkey') THEN ALTER TABLE sales ADD CONSTRAINT sales_cashier_id_fkey FOREIGN KEY (cashier_id) REFERENCES users(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.purchases'::regclass AND conname='purchases_supplier_id_fkey') THEN ALTER TABLE purchases ADD CONSTRAINT purchases_supplier_id_fkey FOREIGN KEY (supplier_id) REFERENCES suppliers(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.purchases'::regclass AND conname='purchases_created_by_fkey') THEN ALTER TABLE purchases ADD CONSTRAINT purchases_created_by_fkey FOREIGN KEY (created_by) REFERENCES users(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.purchase_items'::regclass AND conname='purchase_items_purchase_id_fkey') THEN ALTER TABLE purchase_items ADD CONSTRAINT purchase_items_purchase_id_fkey FOREIGN KEY (purchase_id) REFERENCES purchases(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.purchase_items'::regclass AND conname='purchase_items_medicine_id_fkey') THEN ALTER TABLE purchase_items ADD CONSTRAINT purchase_items_medicine_id_fkey FOREIGN KEY (medicine_id) REFERENCES medicines(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_records'::regclass AND conname='payment_records_sale_id_fkey') THEN ALTER TABLE payment_records ADD CONSTRAINT payment_records_sale_id_fkey FOREIGN KEY (sale_id) REFERENCES sales(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_events'::regclass AND conname='payment_events_payment_id_fkey') THEN ALTER TABLE payment_events ADD CONSTRAINT payment_events_payment_id_fkey FOREIGN KEY (payment_id) REFERENCES payment_records(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_events'::regclass AND conname='payment_events_performed_by_fkey') THEN ALTER TABLE payment_events ADD CONSTRAINT payment_events_performed_by_fkey FOREIGN KEY (performed_by) REFERENCES users(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sale_items'::regclass AND conname='sale_items_sale_id_fkey') THEN ALTER TABLE sale_items ADD CONSTRAINT sale_items_sale_id_fkey FOREIGN KEY (sale_id) REFERENCES sales(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sale_items'::regclass AND conname='sale_items_medicine_id_fkey') THEN ALTER TABLE sale_items ADD CONSTRAINT sale_items_medicine_id_fkey FOREIGN KEY (medicine_id) REFERENCES medicines(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sale_item_batches'::regclass AND conname='sale_item_batches_sale_item_id_fkey') THEN ALTER TABLE sale_item_batches ADD CONSTRAINT sale_item_batches_sale_item_id_fkey FOREIGN KEY (sale_item_id) REFERENCES sale_items(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sale_item_batches'::regclass AND conname='sale_item_batches_batch_id_fkey') THEN ALTER TABLE sale_item_batches ADD CONSTRAINT sale_item_batches_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES medicine_batches(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.inventory_transactions'::regclass AND conname='inventory_transactions_medicine_id_fkey') THEN ALTER TABLE inventory_transactions ADD CONSTRAINT inventory_transactions_medicine_id_fkey FOREIGN KEY (medicine_id) REFERENCES medicines(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.inventory_transactions'::regclass AND conname='inventory_transactions_performed_by_fkey') THEN ALTER TABLE inventory_transactions ADD CONSTRAINT inventory_transactions_performed_by_fkey FOREIGN KEY (performed_by) REFERENCES users(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.audit_logs'::regclass AND conname='audit_logs_user_id_fkey') THEN ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.backup_history'::regclass AND conname='backup_history_requested_by_fkey') THEN ALTER TABLE backup_history ADD CONSTRAINT backup_history_requested_by_fkey FOREIGN KEY (requested_by) REFERENCES users(id); END IF;
+END;
+$foreign_keys$;
+
+DO $check_constraints$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.users'::regclass AND conname='users_role_check') THEN ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('ADMIN','PHARMACIST','CASHIER')); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.users'::regclass AND conname='users_status_check') THEN ALTER TABLE users ADD CONSTRAINT users_status_check CHECK (status IN ('ACTIVE','INACTIVE')); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.suppliers'::regclass AND conname='suppliers_status_check') THEN ALTER TABLE suppliers ADD CONSTRAINT suppliers_status_check CHECK (status IN ('ACTIVE','INACTIVE')); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.medicines'::regclass AND conname='medicines_unit_price_check') THEN ALTER TABLE medicines ADD CONSTRAINT medicines_unit_price_check CHECK (unit_price >= 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.medicines'::regclass AND conname='medicines_quantity_check') THEN ALTER TABLE medicines ADD CONSTRAINT medicines_quantity_check CHECK (quantity >= 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.medicines'::regclass AND conname='medicines_reorder_level_check') THEN ALTER TABLE medicines ADD CONSTRAINT medicines_reorder_level_check CHECK (reorder_level >= 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.medicines'::regclass AND conname='medicines_status_check') THEN ALTER TABLE medicines ADD CONSTRAINT medicines_status_check CHECK (status IN ('ACTIVE','INACTIVE')); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.medicine_batches'::regclass AND conname='medicine_batches_quantity_check') THEN ALTER TABLE medicine_batches ADD CONSTRAINT medicine_batches_quantity_check CHECK (quantity >= 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sales'::regclass AND conname='sales_subtotal_nonnegative_check') THEN ALTER TABLE sales ADD CONSTRAINT sales_subtotal_nonnegative_check CHECK (subtotal >= 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sales'::regclass AND conname='sales_discount_check') THEN ALTER TABLE sales ADD CONSTRAINT sales_discount_check CHECK (discount >= 0 AND discount <= subtotal); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sales'::regclass AND conname='sales_tax_nonnegative_check') THEN ALTER TABLE sales ADD CONSTRAINT sales_tax_nonnegative_check CHECK (tax >= 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sales'::regclass AND conname='sales_total_nonnegative_check') THEN ALTER TABLE sales ADD CONSTRAINT sales_total_nonnegative_check CHECK (total_amount >= 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sales'::regclass AND conname='sales_amounts_nonnegative_check') THEN ALTER TABLE sales ADD CONSTRAINT sales_amounts_nonnegative_check CHECK (amount_received >= 0 AND change_amount >= 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.purchases'::regclass AND conname='purchases_total_amount_check') THEN ALTER TABLE purchases ADD CONSTRAINT purchases_total_amount_check CHECK (total_amount >= 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.purchase_items'::regclass AND conname='purchase_items_quantity_check') THEN ALTER TABLE purchase_items ADD CONSTRAINT purchase_items_quantity_check CHECK (quantity > 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.purchase_items'::regclass AND conname='purchase_items_unit_cost_check') THEN ALTER TABLE purchase_items ADD CONSTRAINT purchase_items_unit_cost_check CHECK (unit_cost >= 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.purchase_items'::regclass AND conname='purchase_items_subtotal_nonnegative_check') THEN ALTER TABLE purchase_items ADD CONSTRAINT purchase_items_subtotal_nonnegative_check CHECK (subtotal >= 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_records'::regclass AND conname='payment_records_method_check') THEN ALTER TABLE payment_records ADD CONSTRAINT payment_records_method_check CHECK (method IN ('CARD','E_WALLET')); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_records'::regclass AND conname='payment_records_status_check') THEN ALTER TABLE payment_records ADD CONSTRAINT payment_records_status_check CHECK (status IN ('PENDING','AUTHORIZED','PAID','FAILED','CANCELLED','EXPIRED','REFUNDED')); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_records'::regclass AND conname='payment_records_amount_check') THEN ALTER TABLE payment_records ADD CONSTRAINT payment_records_amount_check CHECK (amount >= 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_records'::regclass AND conname='payment_records_refund_amount_check') THEN ALTER TABLE payment_records ADD CONSTRAINT payment_records_refund_amount_check CHECK (refund_amount >= 0 AND refund_amount <= amount); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_events'::regclass AND conname='payment_events_status_check') THEN ALTER TABLE payment_events ADD CONSTRAINT payment_events_status_check CHECK (status IN ('PENDING','AUTHORIZED','PAID','FAILED','CANCELLED','EXPIRED','REFUNDED')); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_events'::regclass AND conname='payment_events_previous_status_check') THEN ALTER TABLE payment_events ADD CONSTRAINT payment_events_previous_status_check CHECK (previous_status IS NULL OR previous_status IN ('PENDING','AUTHORIZED','PAID','FAILED','CANCELLED','EXPIRED','REFUNDED')); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sale_items'::regclass AND conname='sale_items_quantity_check') THEN ALTER TABLE sale_items ADD CONSTRAINT sale_items_quantity_check CHECK (quantity > 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sale_items'::regclass AND conname='sale_items_unit_price_check') THEN ALTER TABLE sale_items ADD CONSTRAINT sale_items_unit_price_check CHECK (unit_price >= 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sale_items'::regclass AND conname='sale_items_subtotal_nonnegative_check') THEN ALTER TABLE sale_items ADD CONSTRAINT sale_items_subtotal_nonnegative_check CHECK (subtotal >= 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sale_item_batches'::regclass AND conname='sale_item_batches_quantity_check') THEN ALTER TABLE sale_item_batches ADD CONSTRAINT sale_item_batches_quantity_check CHECK (quantity > 0); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.inventory_transactions'::regclass AND conname='inventory_transactions_type_check') THEN ALTER TABLE inventory_transactions ADD CONSTRAINT inventory_transactions_type_check CHECK (transaction_type IN ('PURCHASE','SALE','RETURN','ADJUSTMENT','EXPIRED','DAMAGED')); END IF;
+END;
+$check_constraints$;
 
 ALTER TABLE users ALTER COLUMN created_at SET DEFAULT now();
 ALTER TABLE users ALTER COLUMN updated_at SET DEFAULT now();
