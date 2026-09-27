@@ -93,6 +93,7 @@ function App() {
   const [booting, setBooting] = useState(true);
   const [inventoryFilter, setInventoryFilter] = useState<"all" | "low-stock" | "expiring-soon">("all");
   const [loggingOut, setLoggingOut] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -118,6 +119,8 @@ function App() {
   };
 
   const loginUser = async () => {
+    if (signingIn) return;
+    setSigningIn(true);
     setLoginError("");
     let loginSucceeded = false;
     try {
@@ -131,6 +134,8 @@ function App() {
       setAuthUser(null);
       setState(emptyState);
       setLoginError(errorMessage(error));
+    } finally {
+      setSigningIn(false);
     }
   };
 
@@ -214,13 +219,21 @@ function App() {
 
           <button
             type="submit"
-            disabled={!login.username || !login.password}
+            disabled={!login.username || !login.password || signingIn}
+            aria-busy={signingIn}
             className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white shadow transition-all duration-150 ease-out hover:bg-teal-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-70"
           >
-            <span className="inline-flex items-center justify-center gap-2">
-              <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-white/90" aria-hidden="true" />
-              Sign in
-            </span>
+            {signingIn ? (
+              <span className="inline-flex items-center justify-center gap-2">
+                <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />
+                Signing in...
+              </span>
+            ) : (
+              <span className="inline-flex items-center justify-center gap-2">
+                <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-white/90" aria-hidden="true" />
+                Sign in
+              </span>
+            )}
           </button>
           {loginError && <div role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{loginError}</div>}
           </form>
