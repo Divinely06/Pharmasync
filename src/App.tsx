@@ -1691,13 +1691,19 @@ function Field({ label, value, onChange, type = "text" }: { label: string; value
 
 function StatCard({ title, value, sub, icon, accent, onClick }: { title: string; value: string; sub: string; icon: React.ReactNode; accent: string; onClick?: () => void }) {
   return (
-    <button type="button" onClick={onClick} className="w-full rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-md focus-visible:border-teal-500">
-      <div className="flex items-center gap-3">
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full rounded-[26px] border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-md focus-visible:border-teal-500"
+    >
+      <div className="flex items-center gap-4">
         <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${accent}`}>{icon}</div>
         <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{title}</div>
-          <div className="mt-1 text-xl font-bold leading-none text-slate-900">{value}</div>
-          <div className="mt-1 text-[11px] text-slate-500">{sub}</div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{title}</div>
+          <div className="mt-2 flex items-end gap-2">
+            <div className="text-3xl font-semibold leading-none tracking-tight text-slate-900">{value}</div>
+          </div>
+          <div className="mt-2 text-[11px] text-slate-500">{sub}</div>
         </div>
       </div>
     </button>
