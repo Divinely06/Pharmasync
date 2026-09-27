@@ -55,7 +55,7 @@ app.use(express.json({ limit: "64kb" }));
 app.use((req, res, next) => {
   const origin = req.header("Origin");
   const allowedOrigin = process.env.CLIENT_ORIGIN;
-  if (!isRequestOriginAllowed(req.method, origin, allowedOrigin, production)) return res.status(403).json({ code: "ORIGIN_REJECTED", error: "Request origin is not allowed" });
+  if (!isRequestOriginAllowed(req.method, origin, allowedOrigin, production, req.headers.host)) return res.status(403).json({ code: "ORIGIN_REJECTED", error: "Request origin is not allowed" });
   if (origin && allowedOrigin && origin === allowedOrigin) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");

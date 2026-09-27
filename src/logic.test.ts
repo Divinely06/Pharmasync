@@ -123,4 +123,9 @@ describe('production request origin policy', () => {
     expect(isRequestOriginAllowed('POST', 'http://127.0.0.1:4175', 'http://localhost:4175', true)).toBe(true);
     expect(isRequestOriginAllowed('POST', 'https://verbose-funicular-4qv6r576x76xf5r5q-4175.app.github.dev', 'http://localhost:4175', true)).toBe(true);
   });
+
+  it('allows same-host production requests when CLIENT_ORIGIN is not configured', () => {
+    expect(isRequestOriginAllowed('POST', 'https://pharmasync-hopemed.vercel.app', undefined, true, 'pharmasync-hopemed.vercel.app')).toBe(true);
+    expect(isRequestOriginAllowed('POST', 'https://evil.example', undefined, true, 'pharmasync-hopemed.vercel.app')).toBe(false);
+  });
 });

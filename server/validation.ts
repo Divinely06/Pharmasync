@@ -7,10 +7,20 @@ const nonNegativeInteger = z.coerce.number().int().nonnegative();
 
 const normalizeOrigin = (value: string | undefined) => value ? value.replace(/\/$/, "") : value;
 const isPreviewHost = (hostname: string) => hostname === "localhost" || hostname === "127.0.0.1" || hostname.endsWith(".app.github.dev") || hostname.endsWith(".preview.app.github.dev");
+const hostFromRequest = (requestHost: string | undefined) => {
+  if (!requestHost) return undefined;
+  const candidate = requestHost.includes(":") && !requestHost.startsWith("[") ? `https://${requestHost}` : `https://${requestHost}`;
+  try {
+    return new URL(candidate);
+  } catch {
+    return undefined;
+  }
+};
 
-export const isRequestOriginAllowed = (method: string, origin: string | undefined, allowedOrigin: string | undefined, production: boolean) => {
+export const isRequestOriginAllowed = (method: string, origin: string | undefined, allowedOrigin: string | undefined, production: boolean, requestHost?: string) => {
   const normalizedOrigin = normalizeOrigin(origin);
   const normalizedAllowed = normalizeOrigin(allowedOrigin);
+  const requestUrl = hostFromRequest(requestHost);
 
   if (!production) return true;
 
@@ -39,6 +49,15 @@ export const isRequestOriginAllowed = (method: string, origin: string | undefine
       if (isEquivalentLocalhost) return true;
     } catch {
       // ignore invalid origins; falls through to preview-host allowance below
+    }
+  }
+
+  if (requestUrl) {
+    try {
+      const originUrl = new URL(normalizedOrigin);
+      if (originUrl.hostname === requestUrl.hostname && originUrl.port === requestUrl.port) return true;
+    } catch {
+      // invalid origin
     }
   }
 
