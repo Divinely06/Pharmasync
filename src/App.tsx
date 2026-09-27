@@ -276,33 +276,9 @@ function SystemShell({
   showLowStock: () => void;
   showExpiringSoon: () => void;
 }) {
-  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [passwordError, setPasswordError] = useState("");
-  const [passwordNotice, setPasswordNotice] = useState("");
-  const [savingPassword, setSavingPassword] = useState(false);
-
-  const changePassword = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setPasswordError("");
-    setPasswordNotice("");
-    setSavingPassword(true);
-    try {
-      await api.changePassword(currentPassword, newPassword);
-      setCurrentPassword("");
-      setNewPassword("");
-      setPasswordNotice("Password updated. Other active sessions were signed out.");
-    } catch (error) {
-      setPasswordError(errorMessage(error));
-    } finally {
-      setSavingPassword(false);
-    }
-  };
-
   return (
-    <div className="app-shell flex h-screen bg-white text-slate-800">
-      <aside className={`fixed inset-y-0 left-0 z-40 w-64 border-r border-slate-200 bg-white shadow-sm transition-transform duration-200 md:relative md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
+    <div className="app-shell flex h-screen min-h-screen bg-white text-slate-800">
+      <aside className={`fixed inset-y-0 left-0 z-40 w-64 min-h-0 border-r border-slate-200 bg-white shadow-sm transition-transform duration-200 md:relative md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
         <div className="flex h-24 items-center justify-center border-b border-slate-100 px-4 py-2">
           <div className="flex items-center justify-center">
             <BrandMark className="h-20 w-40" />
@@ -347,7 +323,6 @@ function SystemShell({
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-slate-800">{currentUser.fullName}</div>
                 <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{currentUser.role}</div>
-                <button onClick={() => { setPasswordDialogOpen(true); setPasswordError(""); setPasswordNotice(""); }} className="mt-1 text-[10px] font-semibold text-teal-700 underline">Change password</button>
               </div>
             </div>
             <button onClick={logout} className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100">Logout</button>
@@ -357,7 +332,7 @@ function SystemShell({
 
       {mobileOpen && <div className="fixed inset-0 z-30 bg-black/30 md:hidden" onClick={() => setMobileOpen(false)} />}
 
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 min-h-0 overflow-hidden">
         <header className="app-header flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 md:px-6">
           <div className="flex items-center gap-3">
             <button onClick={() => setMobileOpen(true)} className="rounded-lg border border-slate-200 p-2 text-slate-600 md:hidden">
@@ -371,7 +346,7 @@ function SystemShell({
           <div className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">System Online</div>
         </header>
 
-        <div className={`h-[calc(100%-73px)] overflow-auto p-4 md:p-6 ${page === "dashboard" ? "dashboard-scroll" : ""}`}>
+        <div className={`h-[calc(100%-73px)] min-h-0 overflow-y-auto overflow-x-hidden p-4 md:p-6 ${page === "dashboard" ? "dashboard-scroll" : ""}`}>
           {page === "dashboard" && <DashboardPage state={state} onNavigate={navigate} onLowStock={showLowStock} onExpiringSoon={showExpiringSoon} />}
           {appError && <div role="alert" className="mb-4 flex items-center justify-between rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><span>{appError}</span><button onClick={() => void refreshData().then(() => setAppError("")).catch((error) => setAppError(errorMessage(error)))} className="font-semibold underline">Retry</button></div>}
           {page === "pos" && <PosPage state={state} onRefresh={refreshData} />}
@@ -383,7 +358,6 @@ function SystemShell({
           {page === "reports" && <ReportsPage state={state} />}
         </div>
       </main>
-      {passwordDialogOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"><form onSubmit={(event) => void changePassword(event)} className="w-full max-w-sm space-y-4 rounded-2xl bg-white p-6 shadow-2xl"><div><h2 className="text-lg font-bold text-slate-900">Change password</h2><p className="mt-1 text-xs text-slate-500">Use at least 10 characters and no more than 72 UTF-8 bytes.</p></div><Field label="Current password" type="password" value={currentPassword} onChange={setCurrentPassword} /><Field label="New password" type="password" value={newPassword} onChange={setNewPassword} />{passwordError && <div role="alert" className="rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{passwordError}</div>}{passwordNotice && <div role="status" className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-800">{passwordNotice}</div>}<div className="flex justify-end gap-3"><button type="button" onClick={() => { setPasswordDialogOpen(false); setCurrentPassword(""); setNewPassword(""); }} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700">Close</button><button type="submit" disabled={savingPassword || !currentPassword || !newPassword} className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{savingPassword ? "Saving..." : "Update password"}</button></div></form></div>}
     </div>
   );
 }
