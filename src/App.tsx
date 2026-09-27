@@ -16,6 +16,7 @@ import {
   getVisibleCategoryFilters,
   matchesMedicineCategory,
   normalizeBarcode,
+  stopMediaStream,
 } from "./data";
 import { ApiError, api, type ReceiptData, type ReportData } from "./api";
 import {
@@ -513,6 +514,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scannerError, setScannerError] = useState("");
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const scannerReaderRef = useRef<unknown>(null);
 
   useEffect(() => {
     if (!scannerOpen) return;
@@ -521,8 +523,17 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     let completed = false;
 
     const stopStream = () => {
+      const candidate = scannerReaderRef.current as { reset?: () => void } | null;
+      candidate?.reset?.();
+      scannerReaderRef.current = null;
+
+      const stream = videoRef.current?.srcObject as MediaStream | null;
+      stopMediaStream(stream);
+
       if (videoRef.current) {
+        videoRef.current.pause();
         videoRef.current.srcObject = null;
+        videoRef.current.load();
       }
     };
 
@@ -548,9 +559,11 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
         }
 
         const reader = new BrowserMultiFormatReader();
+        scannerReaderRef.current = reader;
         const result = await reader.decodeOnceFromVideoDevice(preferred.deviceId, video);
         if (!active || completed) return;
         completed = true;
+        stopStream();
 
         const rawValue = normalizeBarcode(result.getText());
         if (rawValue) {

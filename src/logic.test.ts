@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CATEGORIES, canAccess, buildAuditLog, calculateTotals, dateKey, generateMedicineBarcode, getVisibleCategoryFilters, matchesMedicineCategory } from './data';
+import { CATEGORIES, canAccess, buildAuditLog, calculateTotals, dateKey, generateMedicineBarcode, getVisibleCategoryFilters, matchesMedicineCategory, stopMediaStream } from './data';
 import { api } from './api';
 import { missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from '../server/db';
 import { isRequestOriginAllowed, loginSchema, medicineSchema, passwordChangeSchema, passwordResetSchema, saleSchema, sessionTokenSchema, userCreateSchema, validateSaleTotals } from '../server/validation';
@@ -114,6 +114,19 @@ describe('pharmacy system logic', () => {
     expect(a).not.toBe('480123456001');
     expect(b).not.toBe('480123456001');
     expect(b.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('stops all active media tracks when a scanner session is closed', () => {
+    const trackA = { stop: vi.fn() };
+    const trackB = { stop: vi.fn() };
+    const stream = {
+      getTracks: () => [trackA, trackB],
+    } as unknown as MediaStream;
+
+    stopMediaStream(stream);
+
+    expect(trackA.stop).toHaveBeenCalledTimes(1);
+    expect(trackB.stop).toHaveBeenCalledTimes(1);
   });
 
   it('reports missing required database tables for readiness checks', () => {

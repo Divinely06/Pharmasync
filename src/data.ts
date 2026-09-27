@@ -295,6 +295,11 @@ export const fmt = (n: number) =>
 
 export const normalizeBarcode = (value: string) => value.replace(/\D/g, "").slice(0, 13);
 
+export const stopMediaStream = (stream: MediaStream | null | undefined) => {
+  if (!stream) return;
+  stream.getTracks().forEach((track) => track.stop());
+};
+
 export const generateMedicineBarcode = (seed = "", existing: string[] = []) => {
   const cleanExisting = new Set(existing.map((entry) => normalizeBarcode(entry)).filter(Boolean));
   let candidate = normalizeBarcode(seed);
