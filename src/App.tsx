@@ -304,15 +304,15 @@ function SystemShell({
 }) {
   return (
     <div className="app-shell flex h-screen min-h-screen bg-white text-slate-800">
-      <aside className={`fixed inset-y-0 left-0 z-40 w-64 min-h-0 border-r border-slate-200 bg-white shadow-sm transition-transform duration-200 md:relative md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
-        <div className="flex h-20 items-center justify-center border-b border-slate-100 px-3 py-2">
+      <aside className={`fixed inset-y-0 left-0 z-40 w-64 min-h-0 border-r border-slate-200 bg-[#f4f6f5] shadow-sm transition-transform duration-200 md:relative md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}>
+        <div className="flex h-20 items-center justify-center border-b border-slate-200/80 px-3 py-2">
           <div className="flex items-center justify-center">
             <BrandMark className="h-16 w-32" />
           </div>
         </div>
 
-        <div className="mx-3 mt-3 rounded-2xl bg-gradient-to-r from-teal-600 to-cyan-600 p-3.5 text-white shadow-lg">
-          <div className="text-[10px] uppercase tracking-[0.2em] text-teal-100">Today</div>
+        <div className="mx-3 mt-3 rounded-2xl bg-gradient-to-r from-teal-600 to-cyan-600 p-3.5 text-white shadow-[0_10px_24px_rgba(10,94,103,0.15)]">
+          <div className="text-[10px] uppercase tracking-[0.22em] text-teal-100">Today</div>
           <div className="mt-1 text-xl font-bold">{fmt(todayRevenue)}</div>
           <div className="mt-1 text-[11px] text-teal-100">Sales captured {state.sales.filter((sale) => dateKey(sale.transactionDate) === today()).length} transactions</div>
         </div>
@@ -321,14 +321,15 @@ function SystemShell({
           {visibleNav.map((item) => (
             <button
               key={item.id}
+              type="button"
               onClick={() => {
                 setPage(item.id);
                 setMobileOpen(false);
               }}
-              className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm font-medium transition ${page === item.id ? "bg-teal-50 text-teal-700" : "text-slate-600 hover:bg-slate-100"}`}
+              className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-150 ease-out ${page === item.id ? "bg-[#dfeeea] text-[#1a5d5e] shadow-inner" : "text-slate-600 hover:bg-slate-100/90"}`}
             >
               <span className="flex items-center gap-3">
-                <span className="text-current">{item.icon}</span>
+                <span className="flex h-4 w-4 items-center justify-center text-current [&>svg]:h-4 [&>svg]:w-4 [&>svg]:shrink-0">{item.icon}</span>
                 {item.label}
               </span>
               {item.id === "inventory" && lowStockCount > 0 && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">{lowStockCount}</span>}
@@ -336,10 +337,10 @@ function SystemShell({
           ))}
         </nav>
 
-        <div className="absolute bottom-0 left-0 right-0 border-t border-slate-200 bg-white p-3">
+        <div className="absolute bottom-0 left-0 right-0 border-t border-slate-200 bg-[#f7f9f8] p-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[11px] font-bold text-slate-700">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-[11px] font-bold text-slate-700 shadow-sm ring-1 ring-slate-200">
                 {currentUser.fullName
                   .split(" ")
                   .map((part) => part[0])
@@ -351,7 +352,7 @@ function SystemShell({
                 <div className="text-[10px] uppercase tracking-[0.18em] text-slate-500">{currentUser.role}</div>
               </div>
             </div>
-            <button onClick={() => void logout()} disabled={loggingOut} aria-busy={loggingOut} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition-all duration-150 ease-out hover:bg-slate-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-70">
+            <button type="button" onClick={() => void logout()} disabled={loggingOut} aria-busy={loggingOut} className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-slate-600 transition-all duration-150 ease-out hover:bg-slate-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-70">
               {loggingOut ? (
                 <span className="inline-flex items-center gap-2">
                   <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" aria-hidden="true" />
@@ -422,7 +423,7 @@ function DashboardPage({ state, onNavigate, onLowStock, onExpiringSoon }: { stat
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard title="Today's Revenue" value={fmt(totalRevenue)} sub={`${todaySales.length} transactions`} onClick={() => onNavigate("reports")} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm3.25 10.07H12.75v3.18h-1.5v-3.18H8.75v-1.5h2.5V7.93h1.5v3.14h2.5v1.5Z" /></svg>} accent="bg-emerald-50 text-emerald-600" />
         <StatCard title="Medicines" value={String(state.medicines.length)} sub={`${state.medicines.filter((m) => m.quantity > 0).length} active`} onClick={() => onNavigate("inventory")} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-9Zm3 2.5h10v2H7V10Zm0 4h7v2H7v-2Z" /></svg>} accent="bg-sky-50 text-sky-600" />
-            <StatCard title="Low Stock" value={String(lowStock.length)} sub="Need reorder" onClick={onLowStock} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm0 15a1.25 1.25 0 1 1-1.25-1.25A1.25 1.25 0 0 1 12 17.5Zm1.75-5.75h-3.5V7.5h3.5v4.25Z" /></svg>} accent="bg-amber-50 text-amber-600" />
+        <StatCard title="Low Stock" value={String(lowStock.length)} sub="Need reorder" onClick={onLowStock} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M12 2.5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 12 2.5Zm0 15a1.25 1.25 0 1 1-1.25-1.25A1.25 1.25 0 0 1 12 17.5Zm1.75-5.75h-3.5V7.5h3.5v4.25Z" /></svg>} accent="bg-amber-50 text-amber-600" />
         <StatCard title="Expiring Soon" value={String(expiringSoon.length)} sub="Under 90 days" onClick={onExpiringSoon} icon={<svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5"><path d="M5.5 15.5A6.5 6.5 0 1 1 18.5 15.5a6.5 6.5 0 0 1-13 0Zm7-8.25v6h2v1.5h-3.5v-7.5h1.5Z" /></svg>} accent="bg-rose-50 text-rose-600" />
       </div>
 
@@ -1707,15 +1708,15 @@ function StatCard({ title, value, sub, icon, accent, onClick }: { title: string;
     <button
       type="button"
       onClick={onClick}
-      className="w-full rounded-[26px] border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-md focus-visible:border-teal-500"
+      className="w-full rounded-[22px] border border-slate-200 bg-white p-4 text-left shadow-[0_1px_0_rgba(15,23,42,0.03)] transition-all duration-150 ease-out hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-md focus-visible:border-teal-500"
     >
-      <div className="flex items-center gap-4">
-        <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${accent}`}>{icon}</div>
+      <div className="flex items-center gap-3">
+        <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ring-1 ring-slate-200/80 ${accent}`}>
+          <span className="flex items-center justify-center [&>svg]:h-5 [&>svg]:w-5 [&>svg]:shrink-0">{icon}</span>
+        </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{title}</div>
-          <div className="mt-2 flex items-end gap-2">
-            <div className="text-3xl font-semibold leading-none tracking-tight text-slate-900">{value}</div>
-          </div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">{title}</div>
+          <div className="mt-2 text-[25px] font-semibold leading-none tracking-[-0.04em] text-slate-900">{value}</div>
           <div className="mt-2 text-[11px] text-slate-500">{sub}</div>
         </div>
       </div>
