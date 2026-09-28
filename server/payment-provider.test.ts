@@ -37,6 +37,18 @@ describe("dummy payment provider", () => {
     expect(() => createPaymentProvider("paymongo")).not.toThrow();
   });
 
+  it("falls back to the dummy provider when the live PayMongo credentials are missing", () => {
+    const originalKey = process.env.PAYMONGO_SECRET_KEY;
+    delete process.env.PAYMONGO_SECRET_KEY;
+    delete process.env.PAYMONGO_API_KEY;
+
+    try {
+      expect(createPaymentProvider("paymongo")).toBeInstanceOf(DummyPaymentProvider);
+    } finally {
+      if (originalKey) process.env.PAYMONGO_SECRET_KEY = originalKey;
+    }
+  });
+
   it("creates a PayMongo payment intent when the provider is selected", async () => {
     const originalFetch = globalThis.fetch;
     const fetchMock = vi.fn().mockResolvedValue({

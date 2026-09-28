@@ -300,9 +300,23 @@ export class PayMongoProvider extends SandboxPaymentProvider {
   }
 }
 
+const isConfiguredLiveProvider = (baseUrl?: string, apiKey?: string) => {
+  const normalizedBase = (baseUrl ?? "").trim();
+  const normalizedKey = (apiKey ?? "").trim();
+  return normalizedBase.length > 0 && normalizedBase !== "https://sandbox.example.com/api" && normalizedKey.length > 0 && normalizedKey !== "sandbox-dev-key";
+};
+
 export const createPaymentProvider = (name = process.env.PAYMENT_PROVIDER ?? "dummy"): PaymentProvider => {
   if (name === "dummy") return new DummyPaymentProvider();
-  if (name === "sandbox") return new SandboxPaymentProvider();
-  if (name === "paymongo") return new PayMongoProvider();
+  if (name === "sandbox") {
+    const baseUrl = process.env.PAYMENT_SANDBOX_BASE_URL ?? "https://sandbox.example.com/api";
+    const apiKey = process.env.PAYMENT_SANDBOX_API_KEY ?? process.env.PAYMENT_SANDBOX_SECRET_KEY ?? "sandbox-dev-key";
+    return isConfiguredLiveProvider(baseUrl, apiKey) ? new SandboxPaymentProvider(baseUrl, apiKey) : new DummyPaymentProvider();
+  }
+  if (name === "paymongo") {
+    const baseUrl = process.env.PAYMONGO_BASE_URL ?? "https://api.paymongo.com/v1";
+    const apiKey = process.env.PAYMONGO_SECRET_KEY ?? process.env.PAYMONGO_API_KEY ?? "";
+    return isConfiguredLiveProvider(baseUrl, apiKey) ? new PayMongoProvider(baseUrl, apiKey) : new DummyPaymentProvider();
+  }
   throw new Error(`Payment provider "${name}" is not configured`);
 };
