@@ -683,6 +683,25 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     setIdempotencyKey(crypto.randomUUID());
   };
 
+  const resetTransaction = () => {
+    setReceipt(null);
+    setRemoteMedicines([]);
+    setSearch("");
+    setCategory("All");
+    setSearchPage(1);
+    setPendingPayment(null);
+    setCart([]);
+    setDiscount("0");
+    setDiscountType("none");
+    setDiscountId("");
+    setAmountReceived("0");
+    setPaymentMethod("Cash");
+    setIdempotencyKey(crypto.randomUUID());
+    setSaleError("");
+    setCartError("");
+    void loadRemoteMedicines("", 1);
+  };
+
   const checkPendingPayment = async () => {
     if (!pendingPayment) return;
     try {
@@ -764,7 +783,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
             <div className="receipt-controls flex flex-wrap justify-between gap-2">
               <div className="inline-flex rounded-lg border border-slate-200 p-1"><button aria-pressed={receiptFormat === "thermal"} onClick={() => setReceiptFormat("thermal")} className={`rounded px-2 py-1 text-xs ${receiptFormat === "thermal" ? "bg-teal-700 text-white" : "text-slate-600"}`}>Thermal</button><button aria-pressed={receiptFormat === "standard"} onClick={() => setReceiptFormat("standard")} className={`rounded px-2 py-1 text-xs ${receiptFormat === "standard" ? "bg-teal-700 text-white" : "text-slate-600"}`}>Standard</button></div>
               <button onClick={() => window.print()} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700">Print receipt</button>
-              <button onClick={() => setReceipt(null)} className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white">New transaction</button>
+              <button onClick={resetTransaction} className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white">New transaction</button>
             </div>
           </div>
         </div>
