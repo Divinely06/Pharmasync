@@ -1,5 +1,5 @@
 import "dotenv/config";
-import express, { type NextFunction, type Request, type Response } from "express";
+import express, { type Application, type NextFunction, type Request, type Response } from "express";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -32,7 +32,7 @@ function createPool() {
 }
 let pool = createPool();
 const paymentProvider = createPaymentProvider();
-const app = express();
+const app: Application = express();
 const sessionCookie = "pharmasync_session";
 const sessionLifetime = 8 * 60 * 60 * 1000;
 app.disable("x-powered-by");
