@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CATEGORIES, canAccess, buildAuditLog, calculateTotals, dateKey, generateMedicineBarcode, getVisibleCategoryFilters, matchesMedicineCategory, stopMediaStream } from './data';
 import { api } from './api';
 import { missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from '../server/db';
-import { isRequestOriginAllowed, loginSchema, medicineSchema, passwordChangeSchema, passwordResetSchema, saleSchema, sessionTokenSchema, userCreateSchema, validateSaleTotals } from '../server/validation';
+import { buildSessionCookieOptions, isRequestOriginAllowed, loginSchema, medicineSchema, passwordChangeSchema, passwordResetSchema, saleSchema, sessionTokenSchema, userCreateSchema, validateSaleTotals } from '../server/validation';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -172,6 +172,11 @@ describe('typed API client', () => {
     expect(sessionTokenSchema.safeParse('a'.repeat(64)).success).toBe(true);
     expect(sessionTokenSchema.safeParse('%E0%A4%A').success).toBe(false);
     expect(sessionTokenSchema.safeParse('short').success).toBe(false);
+  });
+
+  it('uses cross-site cookie settings when the API is hosted away from the app origin', () => {
+    expect(buildSessionCookieOptions('https://pharmasync-hopemed.vercel.app', 'https://api.pharmasync.com', true)).toMatchObject({ sameSite: 'none', secure: true, httpOnly: true });
+    expect(buildSessionCookieOptions('https://pharmasync-hopemed.vercel.app', 'https://pharmasync-hopemed.vercel.app', true)).toMatchObject({ sameSite: 'lax', secure: true, httpOnly: true });
   });
 });
 

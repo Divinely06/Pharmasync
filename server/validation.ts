@@ -26,6 +26,20 @@ export const isRequestOriginAllowed = (method: string, origin: string | undefine
   return configuredOrigins.includes(normalizedOrigin);
 };
 
+export const buildSessionCookieOptions = (requestOrigin: string | undefined, configuredClientOrigin: string | undefined, production: boolean) => {
+  const normalizedRequestOrigin = normalizeOrigin(requestOrigin);
+  const normalizedConfiguredOrigin = normalizeOrigin(configuredClientOrigin);
+  const crossSite = Boolean(normalizedRequestOrigin && normalizedConfiguredOrigin && normalizedRequestOrigin !== normalizedConfiguredOrigin);
+  const secure = production || normalizedRequestOrigin?.startsWith("https://") || normalizedConfiguredOrigin?.startsWith("https://") || false;
+
+  return {
+    httpOnly: true,
+    secure,
+    sameSite: crossSite ? "none" as const : "lax" as const,
+    path: "/",
+  };
+};
+
 export const loginSchema = z.object({
   username: requiredText(100),
   password: bcryptCompatiblePassword(1),

@@ -7,7 +7,7 @@ import { Pool, type PoolClient } from "pg";
 import bcrypt from "bcryptjs";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
-import { auditFilterSchema, inventoryMovementSchema, isRequestOriginAllowed, listFilterSchema, loginSchema, medicineSchema, medicineUpdateSchema, passwordChangeSchema, passwordResetSchema, purchaseSchema, reportFilterSchema, saleSchema, sessionTokenSchema, supplierSchema, userCreateSchema, userUpdateSchema, validateSaleTotals } from "./validation.js";
+import { auditFilterSchema, buildSessionCookieOptions, inventoryMovementSchema, isRequestOriginAllowed, listFilterSchema, loginSchema, medicineSchema, medicineUpdateSchema, passwordChangeSchema, passwordResetSchema, purchaseSchema, reportFilterSchema, saleSchema, sessionTokenSchema, supplierSchema, userCreateSchema, userUpdateSchema, validateSaleTotals } from "./validation.js";
 import { allocateFefo } from "./inventory.js";
 import { createLogicalBackup, dumpDatabase } from "./backup.js";
 import { createPaymentProvider, type PaymentStatus } from "./payment-provider.js";
@@ -76,7 +76,14 @@ app.use((req, res, next) => {
 
 type SessionUser = { id: string; username: string; role: "ADMIN" | "PHARMACIST" | "CASHIER" };
 type AuthRequest = Request & { user?: SessionUser };
-const cookieToken = (req: Request) => req.headers.cookie?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${sessionCookie}=`))?.slice(sessionCookie.length + 1);
+const cookieToken = (req: Request) => {
+  const headerCookie = req.headers.cookie?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${sessionCookie}=`))?.slice(`${sessionCookie}=`.length);
+  if (headerCookie) return headerCookie;
+  const auth = req.headers.authorization;
+  if (!auth || !auth.toLowerCase().startsWith("bearer ")) return undefined;
+  return auth.slice("Bearer ".length).trim();
+};
+const sessionCookieOptions = (req: Request) => buildSessionCookieOptions(req.header("Origin"), process.env.CLIENT_ORIGIN, production);
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 const auth = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -142,7 +149,7 @@ app.post("/api/login", loginLimiter, async (req, res) => {
     await audit(client, user.id, "LOGIN", "USER", user.id, { username: user.username });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
-  res.cookie(sessionCookie, token, { httpOnly: true, secure: production, sameSite: "lax", maxAge: sessionLifetime, path: "/" });
+  res.cookie(sessionCookie, token, { ...sessionCookieOptions(req), maxAge: sessionLifetime });
   const safeUser = await pool.query(`${safeUserSelect} WHERE id = $1`, [user.id]);
   res.json({ user: safeUser.rows[0] });
 });
@@ -159,7 +166,7 @@ app.post("/api/logout", auth, async (req: AuthRequest, res) => {
     await audit(client, req.user!.id, "LOGOUT", "USER", req.user!.id, { username: req.user!.username });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
-  res.clearCookie(sessionCookie, { httpOnly: true, secure: production, sameSite: "lax", path: "/" });
+  res.clearCookie(sessionCookie, { ...sessionCookieOptions(req), maxAge: undefined });
   res.json({ ok: true });
 });
 
@@ -682,10 +689,11 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
       for (const line of lines) {
         for (const allocation of line.allocations) {
           const batch = await client.query("UPDATE medicine_batches SET quantity=quantity-$1,updated_at=now() WHERE id=$2 AND quantity >= $1 RETURNING quantity", [allocation.quantity,allocation.batchId]);
-          if (!batch.rowCount) throw new Error("Batch stock changed during checkout");
+          if (!batch.rowCount) throw Object.assign(new Error("Batch stock changed during checkout"), { status: 409, code: "INSUFFICIENT_STOCK" });
           await client.query("INSERT INTO sale_item_batches (sale_item_id,batch_id,quantity) VALUES ($1,$2,$3)", [line.saleItemId,allocation.batchId,allocation.quantity]);
         }
         const stock = await client.query("UPDATE medicines SET quantity=quantity-$1,updated_at=now() WHERE id=$2 RETURNING quantity", [line.quantity,line.id]);
+        if (!stock.rowCount) throw Object.assign(new Error("Medicine stock changed during checkout"), { status: 409, code: "INSUFFICIENT_STOCK" });
         await client.query("INSERT INTO inventory_transactions (id,medicine_id,transaction_type,quantity,previous_quantity,resulting_quantity,reference_id,performed_by,occurred_at,notes) VALUES ($1,$2,'SALE',$3,$4,$5,$6,$7,now(),$8)", [`inv-${randomUUID()}`,line.id,line.quantity,stock.rows[0].quantity+line.quantity,stock.rows[0].quantity,saleId,req.user!.id,`POS sale ${saleId}`]);
       }
       await audit(client,req.user!.id,"SALE_COMPLETED","SALE",saleId,{ total,paymentMethod:body.paymentMethod, discountType:body.discountType, discountIdProvided:Boolean(body.discountId.trim()), simulated:!cash });
