@@ -10,7 +10,7 @@ import { rateLimit } from "express-rate-limit";
 import { auditFilterSchema, buildSessionCookieOptions, inventoryMovementSchema, isRequestOriginAllowed, listFilterSchema, loginSchema, medicineSchema, medicineUpdateSchema, passwordChangeSchema, passwordResetSchema, purchaseSchema, reportFilterSchema, saleSchema, sessionTokenSchema, supplierSchema, userCreateSchema, userUpdateSchema, validateSaleTotals } from "./validation.js";
 import { allocateFefo } from "./inventory.js";
 import { createLogicalBackup, dumpDatabase } from "./backup.js";
-import { createPaymentProvider, isPaymentInProgress, type PaymentStatus } from "./payment-provider.js";
+import { createPaymentProvider, isPaymentInProgress, verifyPayMongoWebhookSignature, type PaymentMethod, type PaymentStatus } from "./payment-provider.js";
 import { applyDatabaseSchema, missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from "./db.js";
 
 const connectionString = normalizeDatabaseUrl(process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI ?? "");
@@ -18,6 +18,7 @@ if (!connectionString) throw new Error("DATABASE_URL is required");
 const businessTimeZone = "Asia/Manila";
 const serverless = Boolean(process.env.VERCEL);
 const production = process.env.NODE_ENV === "production";
+const paymentProviderMode = process.env.PAYMENT_PROVIDER ?? "dummy";
 const allowSimulatedPayments = !production || process.env.ALLOW_SIMULATED_PAYMENTS === "true";
 function createPool() {
   return new Pool({
@@ -54,6 +55,13 @@ const logError = (event: string, error: unknown) => {
 app.use(express.json({ limit: "64kb" }));
 app.use((req, res, next) => {
   const origin = req.header("Origin");
+  if (req.path === "/api/webhooks/paymongo" && !origin) return next();
+  app.use(express.json({
+    limit: "64kb",
+    verify: (req, _res, body) => {
+      if (req.url?.split("?")[0] === "/api/webhooks/paymongo") (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(body);
+    },
+  }));
   const allowedOrigin = process.env.CLIENT_ORIGIN;
   if (!isRequestOriginAllowed(req.method, origin, allowedOrigin, production)) return res.status(403).json({ code: "ORIGIN_REJECTED", error: "Request origin is not allowed" });
   const configuredOrigins = (allowedOrigin ?? "").split(",").map((entry) => entry.trim().replace(/\/$/, ""));
@@ -106,6 +114,24 @@ const audit = async (client: PoolClient, userId: string, action: string, entityT
   await client.query("INSERT INTO audit_logs (id, user_id, action, entity_type, entity_id, metadata, success) VALUES ($1,$2,$3,$4,$5,$6,$7)", [`log-${randomUUID()}`, userId, action, entityType, entityId, metadata, success]);
   await client.query("SET LOCAL app.audit_cleanup = 'true'");
   await client.query("DELETE FROM audit_logs WHERE id NOT IN (SELECT id FROM audit_logs ORDER BY occurred_at DESC, id DESC LIMIT 150)");
+};
+const fulfillSale = async (client: PoolClient, saleId: string, userId: string) => {
+  const items = await client.query("SELECT si.id AS sale_item_id,si.medicine_id,si.quantity,m.brand_name FROM sale_items si JOIN medicines m ON m.id=si.medicine_id WHERE si.sale_id=$1 ORDER BY si.id", [saleId]);
+  if (!items.rowCount) throw Object.assign(new Error("Sale items are unavailable"), { status: 409, code: "SALE_ITEMS_UNAVAILABLE" });
+  for (const item of items.rows) {
+    const batches = await client.query("SELECT id,quantity FROM medicine_batches WHERE medicine_id=$1 AND quantity>0 AND expiration_date>=CURRENT_DATE ORDER BY expiration_date,created_at,id FOR UPDATE", [item.medicine_id]);
+    const allocations = allocateFefo(batches.rows, item.quantity);
+    if (!allocations) throw Object.assign(new Error(`Insufficient stock available for ${item.brand_name}`), { status: 409, code: "INSUFFICIENT_STOCK" });
+    for (const allocation of allocations) {
+      const batch = await client.query("UPDATE medicine_batches SET quantity=quantity-$1,updated_at=now() WHERE id=$2 AND quantity >= $1 RETURNING quantity", [allocation.quantity,allocation.batchId]);
+      if (!batch.rowCount) throw Object.assign(new Error("Batch stock changed during checkout"), { status: 409, code: "INSUFFICIENT_STOCK" });
+      await client.query("INSERT INTO sale_item_batches (sale_item_id,batch_id,quantity) VALUES ($1,$2,$3)", [item.id,allocation.batchId,allocation.quantity]);
+    }
+    const stock = await client.query("UPDATE medicines SET quantity=quantity-$1,updated_at=now() WHERE id=$2 RETURNING quantity", [item.quantity,item.medicine_id]);
+    if (!stock.rowCount) throw Object.assign(new Error("Medicine stock changed during checkout"), { status: 409, code: "INSUFFICIENT_STOCK" });
+    await client.query("INSERT INTO inventory_transactions (id,medicine_id,transaction_type,quantity,previous_quantity,resulting_quantity,reference_id,performed_by,occurred_at,notes) VALUES ($1,$2,'SALE',$3,$4,$5,$6,$7,now(),$8)", [`inv-${randomUUID()}`,item.medicine_id,item.quantity,stock.rows[0].quantity+item.quantity,stock.rows[0].quantity,saleId,userId,`POS sale ${saleId}`]);
+  }
+  await client.query("UPDATE sales SET status='COMPLETED' WHERE id=$1", [saleId]);
 };
 const withClient = async <T>(operation: (client: PoolClient) => Promise<T>): Promise<T> => {
   const client = await pool.connect();
@@ -634,18 +660,19 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
   const parsed = saleSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_INPUT", error: "Sale details are invalid" });
   const body = parsed.data;
-  if (body.paymentMethod !== "Cash" && !allowSimulatedPayments) return res.status(503).json({ code: "SIMULATED_PAYMENT_DISABLED", error: "Cashless demo payments are disabled in production" });
+  const simulatedProvider = paymentProviderMode === "dummy" || paymentProviderMode === "sandbox";
+  if (body.paymentMethod !== "Cash" && production && simulatedProvider && !allowSimulatedPayments) return res.status(503).json({ code: "SIMULATED_PAYMENT_DISABLED", error: "Cashless demo payments are disabled in production" });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [body.idempotencyKey]);
-    const existing = await client.query("SELECT s.id,s.status,p.id AS payment_id,p.status AS payment_status FROM sales s LEFT JOIN LATERAL (SELECT id,status FROM payment_records WHERE sale_id=s.id ORDER BY created_at DESC LIMIT 1) p ON true WHERE s.idempotency_key=$1", [body.idempotencyKey]);
+    const existing = await client.query("SELECT s.id,s.status,p.id AS payment_id,p.status AS payment_status,(SELECT metadata->>'checkoutUrl' FROM payment_events WHERE payment_id=p.id AND event_type='CREATED' ORDER BY occurred_at DESC LIMIT 1) AS checkout_url FROM sales s LEFT JOIN LATERAL (SELECT id,status FROM payment_records WHERE sale_id=s.id ORDER BY created_at DESC LIMIT 1) p ON true WHERE s.idempotency_key=$1", [body.idempotencyKey]);
     if (existing.rowCount) {
       await client.query("COMMIT");
       const prior = existing.rows[0];
       const paymentStatus = prior.payment_status ?? (prior.status === "COMPLETED" ? "PAID" : prior.status);
       const statusCode = paymentStatus === "PAID" ? 200 : isPaymentInProgress(paymentStatus) ? 202 : 402;
-      return res.status(statusCode).json({ id: prior.id, paymentId: prior.payment_id, status: paymentStatus, duplicate: true, ...(statusCode === 402 ? { error: "Payment was not confirmed. Start a new attempt to retry." } : {}) });
+      return res.status(statusCode).json({ id: prior.id, paymentId: prior.payment_id, status: paymentStatus, checkoutUrl: prior.checkout_url ?? null, duplicate: true, ...(statusCode === 402 ? { error: "Payment was not confirmed. Start a new attempt to retry." } : {}) });
     }
     const lines: { id: string; quantity: number; unitPrice: number; subtotal: number; brandName: string; allocations: { batchId: string; quantity: number }[]; saleItemId?: string }[] = [];
     for (const item of body.items) {
@@ -670,6 +697,7 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
     if (!saleTotals.valid) throw Object.assign(new Error(saleTotals.reason ?? "Sale totals are invalid"), { status: 400, code: "INVALID_INPUT" });
     const total = saleTotals.total;
     const saleId = `TXN-${randomUUID()}`;
+    const paymentId = body.paymentMethod === "Cash" ? null : `pay-${randomUUID()}`;
     await client.query("INSERT INTO sales (id,cashier_id,transaction_date,subtotal,discount,tax,total_amount,payment_method,amount_received,change_amount,status,idempotency_key) VALUES ($1,$2,now(),$3,$4,$5,$6,$7,$8,$9,'PENDING',$10)", [saleId,req.user!.id,subtotal,discount,tax,total,body.paymentMethod,cash ? received : total,cash ? received-total : 0,body.idempotencyKey]);
     for (const line of lines) {
       const itemResult = await client.query("INSERT INTO sale_items (id,sale_id,medicine_id,quantity,unit_price,subtotal) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id", [`sale-item-${randomUUID()}`,saleId,line.id,line.quantity,line.unitPrice,line.subtotal]);
@@ -677,38 +705,38 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
     }
     let paymentStatus: PaymentStatus = "PAID";
     let paymentProviderName = "CASH";
-    let paymentId: string | null = null;
+    let checkoutUrl: string | null = null;
     if (!cash) {
-      const result = await paymentProvider.createPayment({ saleId,amount:total,currency:"PHP",method:body.paymentMethod === "Card" ? "CARD" : "E_WALLET",idempotencyKey:`payment-${body.idempotencyKey}` });
+      const providerMethod: PaymentMethod = body.paymentMethod === "Card" ? "CARD" : body.paymentMethod === "GCash" ? "GCASH" : "MAYA";
+      const returnOrigin = req.header("Origin") ?? process.env.CLIENT_ORIGIN?.split(",")[0]?.trim() ?? "http://localhost:4175";
+      const returnUrl = new URL("/", returnOrigin);
+      returnUrl.searchParams.set("payment_sale", saleId);
+      returnUrl.searchParams.set("payment_id", paymentId!);
+      const successUrl = new URL(returnUrl);
+      successUrl.searchParams.set("payment_return", "success");
+      const cancelUrl = new URL(returnUrl);
+      cancelUrl.searchParams.set("payment_return", "cancel");
+      const result = await paymentProvider.createPayment({ saleId,amount:total,currency:"PHP",method:providerMethod,idempotencyKey:`payment-${body.idempotencyKey}`,successUrl:successUrl.toString(),cancelUrl:cancelUrl.toString() });
       paymentStatus = result.status;
       paymentProviderName = result.provider;
-      paymentId = `pay-${randomUUID()}`;
+      checkoutUrl = result.checkoutUrl ?? null;
       await client.query("INSERT INTO payment_records (id,sale_id,method,status,provider,provider_reference,idempotency_key,amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [paymentId,saleId,body.paymentMethod === "Card" ? "CARD" : "E_WALLET",result.status,result.provider,result.providerReference,`payment-${body.idempotencyKey}`,total]);
-      await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,NULL,$3,'CREATED',$4,$5)", [`payment-event-${randomUUID()}`,paymentId,result.status,req.user!.id,{ provider:result.provider,failureCode:result.failureCode ?? null }]);
+      await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,NULL,$3,'CREATED',$4,$5)", [`payment-event-${randomUUID()}`,paymentId,result.status,req.user!.id,{ provider:result.provider,failureCode:result.failureCode ?? null,checkoutUrl }]);
     }
     if (paymentStatus === "PAID") {
-      await client.query("UPDATE sales SET status='COMPLETED' WHERE id=$1", [saleId]);
-      for (const line of lines) {
-        for (const allocation of line.allocations) {
-          const batch = await client.query("UPDATE medicine_batches SET quantity=quantity-$1,updated_at=now() WHERE id=$2 AND quantity >= $1 RETURNING quantity", [allocation.quantity,allocation.batchId]);
-          if (!batch.rowCount) throw Object.assign(new Error("Batch stock changed during checkout"), { status: 409, code: "INSUFFICIENT_STOCK" });
-          await client.query("INSERT INTO sale_item_batches (sale_item_id,batch_id,quantity) VALUES ($1,$2,$3)", [line.saleItemId,allocation.batchId,allocation.quantity]);
-        }
-        const stock = await client.query("UPDATE medicines SET quantity=quantity-$1,updated_at=now() WHERE id=$2 RETURNING quantity", [line.quantity,line.id]);
-        if (!stock.rowCount) throw Object.assign(new Error("Medicine stock changed during checkout"), { status: 409, code: "INSUFFICIENT_STOCK" });
-        await client.query("INSERT INTO inventory_transactions (id,medicine_id,transaction_type,quantity,previous_quantity,resulting_quantity,reference_id,performed_by,occurred_at,notes) VALUES ($1,$2,'SALE',$3,$4,$5,$6,$7,now(),$8)", [`inv-${randomUUID()}`,line.id,line.quantity,stock.rows[0].quantity+line.quantity,stock.rows[0].quantity,saleId,req.user!.id,`POS sale ${saleId}`]);
-      }
-      await audit(client,req.user!.id,"SALE_COMPLETED","SALE",saleId,{ total,paymentMethod:body.paymentMethod, discountType:body.discountType, discountIdProvided:Boolean(body.discountId.trim()), simulated:!cash });
+      await fulfillSale(client,saleId,req.user!.id);
+      await audit(client,req.user!.id,"SALE_COMPLETED","SALE",saleId,{ total,paymentMethod:body.paymentMethod, discountType:body.discountType, discountIdProvided:Boolean(body.discountId.trim()), simulated:paymentProviderName === "DUMMY" });
       if (!cash) await audit(client,req.user!.id,"PAYMENT_PAID","PAYMENT",paymentId!,{ provider:paymentProviderName,saleId });
     } else {
       if (!isPaymentInProgress(paymentStatus)) await client.query("UPDATE sales SET status='VOIDED' WHERE id=$1", [saleId]);
       await audit(client,req.user!.id,"PAYMENT_ATTEMPT","PAYMENT",paymentId ?? saleId,{ paymentStatus,simulated:paymentProviderName === "DUMMY",saleId });
     }
     await client.query("COMMIT");
-    res.status(paymentStatus === "PAID" ? 201 : isPaymentInProgress(paymentStatus) ? 202 : 402).json({ id: saleId, paymentId, status: paymentStatus, simulated: paymentProviderName === "DUMMY", totalAmount: total, changeAmount: cash ? received-total : 0, items: lines });
+    res.status(paymentStatus === "PAID" ? 201 : isPaymentInProgress(paymentStatus) ? 202 : 402).json({ id: saleId, paymentId, status: paymentStatus, provider: paymentProviderName, checkoutUrl, simulated: paymentProviderName === "DUMMY", totalAmount: total, changeAmount: cash ? received-total : 0, items: lines });
   } catch (error) {
     await client.query("ROLLBACK");
     const failure = error as Error & { status?: number; code?: string; constraint?: string };
+    logError("sale_failed", error);
     if (failure.code === "23514") {
       return res.status(409).json({ code: "INVALID_STATE", error: "The sale totals or stock are inconsistent. Please refresh and try again." });
     }
@@ -717,10 +745,37 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
 });
 
 app.get("/api/payments/:id", auth, async (req: AuthRequest, res) => {
-  const result = await pool.query('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",s.cashier_id AS "cashierId" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1', [req.params.id]);
+  const result = await pool.query('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",p.amount::float AS amount,s.status AS "saleStatus",s.cashier_id AS "cashierId" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1', [req.params.id]);
   if (!result.rowCount || (req.user!.role === "CASHIER" && result.rows[0].cashierId !== req.user!.id)) return res.status(404).json({ code: "NOT_FOUND", error: "Payment attempt not found" });
-  const { cashierId: _cashierId, ...payment } = result.rows[0];
-  res.json(payment);
+  const current = result.rows[0];
+  if (isPaymentInProgress(current.status) && current.providerReference) {
+    const remote = await paymentProvider.getPayment(current.providerReference);
+    if (remote && remote.status !== current.status) {
+      if (current.provider === "PAYMONGO" && remote.status === "PAID" && (remote.referenceNumber !== current.saleId || remote.amountMinor !== Math.round(current.amount * 100) || remote.currency?.toUpperCase() !== "PHP")) {
+        return res.status(409).json({ code: "PAYMENT_DETAILS_MISMATCH", error: "Provider payment details do not match this sale" });
+      }
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const locked = await client.query('SELECT p.status,p.sale_id,s.status AS sale_status FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1 FOR UPDATE OF p,s', [current.id]);
+        if (locked.rowCount && isPaymentInProgress(locked.rows[0].status) && remote.status !== "PENDING") {
+          if (remote.status === "PAID") {
+            if (locked.rows[0].sale_status !== "PENDING") throw Object.assign(new Error("Sale is not awaiting payment"), { status: 409, code: "INVALID_PAYMENT_STATE" });
+            await fulfillSale(client,current.saleId,req.user!.id);
+          } else if (["FAILED", "CANCELLED", "EXPIRED"].includes(remote.status)) {
+            await client.query("UPDATE sales SET status='VOIDED' WHERE id=$1 AND status='PENDING'", [current.saleId]);
+          }
+          await client.query("UPDATE payment_records SET status=$2,updated_at=now() WHERE id=$1", [current.id,remote.status]);
+          await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,$3,$4,'PROVIDER_UPDATE',$5,$6)", [`payment-event-${randomUUID()}`,current.id,locked.rows[0].status,remote.status,req.user!.id,{ provider:current.provider,providerReference:current.providerReference }]);
+          await audit(client,req.user!.id,remote.status === "PAID" ? "PAYMENT_PAID" : "PAYMENT_STATUS_UPDATED","PAYMENT",current.id,{ provider:current.provider,saleId:current.saleId,status:remote.status });
+        }
+        await client.query("COMMIT");
+      } catch (error) { await client.query("ROLLBACK"); throw error; }
+      finally { client.release(); }
+    }
+  }
+  const latest = await pool.query('SELECT id,sale_id AS "saleId",status,provider,provider_reference AS "providerReference" FROM payment_records WHERE id=$1', [current.id]);
+  res.json(latest.rows[0]);
 });
 
 app.post("/api/payments/:id/cancel", auth, allow("ADMIN", "PHARMACIST", "CASHIER"), async (req: AuthRequest, res) => {

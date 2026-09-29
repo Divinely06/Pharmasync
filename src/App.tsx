@@ -74,7 +74,7 @@ const isExpiringSoon = (date: string | Date) => daysUntil(date) > 0 && daysUntil
 const transactionTimeFormatter = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
 function App() {
   const [state, setState] = useState<PharmacyState>(emptyState);
-  const [page, setPage] = useState<Page>("dashboard");
+  const [page, setPage] = useState<Page>(() => new URLSearchParams(window.location.search).has("payment_sale") ? "pos" : "dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [authUser, setAuthUser] = useState<PharmacyUser | null>(null);
   const [login, setLogin] = useState({ username: "", password: "" });
@@ -476,6 +476,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState("");
   const [pendingPayment, setPendingPayment] = useState<{ saleId: string; paymentId: string } | null>(null);
+  const paymentReturnHandled = useRef(false);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scannerError, setScannerError] = useState("");
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -649,6 +650,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     setAmountReceived("0");
     setPaymentMethod("Cash");
     setIdempotencyKey(crypto.randomUUID());
+    sessionStorage.removeItem("pharmasync_pending_checkout");
   };
 
   const resetTransaction = () => {
@@ -701,6 +703,46 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     } catch (error) { setSaleError(errorMessage(error)); }
   };
 
+  useEffect(() => {
+    if (paymentReturnHandled.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const saleId = params.get("payment_sale");
+    const paymentId = params.get("payment_id");
+    const paymentReturn = params.get("payment_return");
+    if (!saleId || !paymentId || !paymentReturn) return;
+    paymentReturnHandled.current = true;
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.hash}`);
+    const savedCheckout = sessionStorage.getItem("pharmasync_pending_checkout");
+    if (savedCheckout) {
+      try {
+        const saved = JSON.parse(savedCheckout) as { cart?: CartItem[]; discount?: string; discountType?: "none" | "pwd" | "senior"; discountId?: string; amountReceived?: string; paymentMethod?: string };
+        if (Array.isArray(saved.cart)) setCart(saved.cart);
+        if (saved.discount !== undefined) setDiscount(saved.discount);
+        if (saved.discountType) setDiscountType(saved.discountType);
+        if (saved.discountId !== undefined) setDiscountId(saved.discountId);
+        if (saved.amountReceived !== undefined) setAmountReceived(saved.amountReceived);
+        if (saved.paymentMethod) setPaymentMethod(saved.paymentMethod);
+      } catch { sessionStorage.removeItem("pharmasync_pending_checkout"); }
+    }
+    setPendingPayment({ saleId, paymentId });
+    void (async () => {
+      try {
+        let paymentStatus = (await api.paymentStatus(paymentId)).status;
+        if (paymentStatus === "PAID") {
+          await completeSale(saleId);
+          return;
+        }
+        if (paymentReturn === "cancel" && ["PENDING", "AUTHORIZED"].includes(paymentStatus)) paymentStatus = (await api.cancelPayment(paymentId)).status;
+        if (["FAILED", "CANCELLED", "EXPIRED", "REFUNDED"].includes(paymentStatus)) {
+          setPendingPayment(null);
+          setIdempotencyKey(crypto.randomUUID());
+          setSaleError(`Payment ${paymentStatus.toLowerCase()}. The cart is ready to retry.`);
+          sessionStorage.removeItem("pharmasync_pending_checkout");
+        } else setSaleError("Payment is still pending. Check the provider status before retrying.");
+      } catch (error) { setSaleError(errorMessage(error)); }
+    })();
+  }, []);
+
   const submitSale = async () => {
     if (!cart.length || pendingPayment) return;
     setSaleError("");
@@ -726,6 +768,11 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
       if (result.status === "PENDING" || result.status === "AUTHORIZED") {
         if (!result.paymentId) throw new Error("Pending payment did not return a payment reference.");
         setPendingPayment({ saleId: result.id, paymentId: result.paymentId });
+        if (result.checkoutUrl) {
+          sessionStorage.setItem("pharmasync_pending_checkout", JSON.stringify({ cart, discount, discountType, discountId, amountReceived, paymentMethod }));
+          window.location.assign(result.checkoutUrl);
+          return;
+        }
         setSaleError("Payment is pending. Do not submit the order again; stock has not changed.");
         void onRefresh().catch(() => undefined);
         return;
@@ -860,7 +907,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
               <input value={amountReceived} onChange={(e) => setAmountReceived(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
             </div>
           )}
-          {paymentMethod !== "Cash" && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">Demo simulation only. No real payment is collected.</div>}
+          {paymentMethod !== "Cash" && <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">You'll continue to the configured payment provider to complete this transaction.</div>}
           {pendingPayment && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"><div className="font-semibold">Payment pending confirmation</div><div className="mt-1">Stock remains unchanged. Check the provider status or cancel this attempt.</div><div className="mt-2 flex gap-3"><button onClick={() => void checkPendingPayment()} className="font-semibold underline">Check status</button><button onClick={() => void cancelPendingPayment()} className="font-semibold underline">Cancel attempt</button></div></div>}
           {saleError && <div role="alert" className="rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{saleError}</div>}
 
@@ -872,7 +919,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
             {paymentMethod === 'Cash' && <div className="flex items-center justify-between text-sm"><span>Change</span><span>{fmt(change)}</span></div>}
           </div>
 
-          <button onClick={() => void submitSale()} disabled={submitting || cart.length === 0 || Boolean(pendingPayment)} className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white transition-all duration-150 ease-out hover:bg-teal-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50">{submitting ? <span className="inline-flex items-center justify-center gap-2"><span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />Processing...</span> : paymentMethod === "Cash" ? "Complete sale" : `Simulate ${paymentMethod} payment`}</button>
+          <button onClick={() => void submitSale()} disabled={submitting || cart.length === 0 || Boolean(pendingPayment)} className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white transition-all duration-150 ease-out hover:bg-teal-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50">{submitting ? <span className="inline-flex items-center justify-center gap-2"><span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />Processing...</span> : paymentMethod === "Cash" ? "Complete sale" : `Continue to ${paymentMethod}`}</button>
         </div>
       </div>
     </div>
