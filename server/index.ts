@@ -209,6 +209,14 @@ const reconcileRefund = async (paymentId: string, refund: Awaited<ReturnType<typ
     throw error;
   } finally { client.release(); }
 };
+const queryPaymentRead = async (query: string, parameters: string[]) => {
+  try { return await pool.query(query, parameters); }
+  catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && code.startsWith("08")) return pool.query(query, parameters);
+    throw error;
+  }
+};
 const createOrRecoverCheckout = async (paymentId: string) => {
   const lookup = await pool.query('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",p.idempotency_key AS "idempotencyKey",p.amount::float AS amount,s.payment_method AS "paymentMethod" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1', [paymentId]);
   if (!lookup.rowCount) throw Object.assign(new Error("Payment attempt not found"), { status: 404, code: "PAYMENT_NOT_FOUND" });
@@ -893,19 +901,19 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
 });
 
 app.get("/api/payments/:id", auth, async (req: AuthRequest, res) => {
-  const result = await pool.query('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",p.amount::float AS amount,s.status AS "saleStatus",s.cashier_id AS "cashierId" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1', [req.params.id]);
+  const result = await queryPaymentRead('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",p.amount::float AS amount,s.status AS "saleStatus",s.cashier_id AS "cashierId" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1', [req.params.id]);
   if (!result.rowCount || (req.user!.role === "CASHIER" && result.rows[0].cashierId !== req.user!.id)) return res.status(404).json({ code: "NOT_FOUND", error: "Payment attempt not found" });
   const current = result.rows[0];
   if (isPaymentInProgress(current.status) && current.providerReference) {
     const remote = await paymentProvider.getPayment(current.providerReference);
     if (remote) await reconcilePayment(current.id,remote,"STATUS_CHECK");
   }
-  const latest = await pool.query('SELECT id,sale_id AS "saleId",status,provider,provider_reference AS "providerReference" FROM payment_records WHERE id=$1', [current.id]);
+  const latest = await queryPaymentRead('SELECT id,sale_id AS "saleId",status,provider,provider_reference AS "providerReference" FROM payment_records WHERE id=$1', [current.id]);
   res.json(latest.rows[0]);
 });
 
 app.post("/api/payments/:id/cancel", auth, allow("ADMIN", "PHARMACIST", "CASHIER"), async (req: AuthRequest, res) => {
-  const payment = await pool.query('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",s.cashier_id AS "cashierId" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1', [req.params.id]);
+  const payment = await queryPaymentRead('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",s.cashier_id AS "cashierId" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1', [req.params.id]);
   if (!payment.rowCount || (req.user!.role === "CASHIER" && payment.rows[0].cashierId !== req.user!.id)) return res.status(404).json({ code: "NOT_FOUND", error: "Payment attempt not found" });
   const current = payment.rows[0];
   if (!isPaymentInProgress(current.status)) return res.json({ id: current.id, status: current.status });
