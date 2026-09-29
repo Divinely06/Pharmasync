@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CATEGORIES, canAccess, buildAuditLog, calculateTotals, dateKey, generateMedicineBarcode, getVisibleCategoryFilters, matchesMedicineCategory, netSaleAmount, stopMediaStream } from './data';
+import { CATEGORIES, canAccess, buildAuditLog, calculateTotals, dateKey, filterPOSMedicines, generateMedicineBarcode, getVisibleCategoryFilters, matchesMedicineCategory, netSaleAmount, stopMediaStream } from './data';
 import { api } from './api';
 import { missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from '../server/db';
 import { buildSessionCookieOptions, isRequestOriginAllowed, loginSchema, medicineSchema, passwordChangeSchema, passwordResetSchema, saleSchema, sessionTokenSchema, userCreateSchema, validateSaleTotals } from '../server/validation';
@@ -60,6 +60,18 @@ describe('pharmacy system logic', () => {
       'Topical/Skin',
       'Medical Supply',
     ]));
+  });
+
+  it('searches medicines beyond the first POS page', () => {
+    const catalog = Array.from({ length: 35 }, (_, index) => ({
+      brandName: `Medicine ${index + 1}`,
+      genericName: 'Amoxicillin',
+      barcode: String(index + 1),
+      medicineType: 'Antibiotic',
+    }));
+
+    expect(filterPOSMedicines(catalog, '', 'All', () => true)).toHaveLength(35);
+    expect(filterPOSMedicines(catalog, ' medicine 35 ', 'Antibiotic', () => true)).toEqual([catalog[34]]);
   });
 
   it('hides unavailable POS categories while keeping valid ones visible', () => {

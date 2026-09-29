@@ -13,8 +13,8 @@ import {
   dateKey,
   fmt,
   generateMedicineBarcode,
+  filterPOSMedicines,
   getVisibleCategoryFilters,
-  matchesMedicineCategory,
   netSaleAmount,
   normalizeBarcode,
   stopMediaStream,
@@ -30,6 +30,7 @@ type CartItem = Medicine & { quantity: number };
 
 const pharmaBackground = "/background-phar.jpg";
 const appLogo = "/dashboard-logo.png";
+const POS_PAGE_SIZE = 30;
 
 const navMeta: { id: Page; label: string; area: AccessArea; icon: React.ReactNode }[] = [
   { id: "dashboard", label: "Dashboard", area: "DASHBOARD", icon: <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M3 10.5 12 3l9 7.5v9.75A1.75 1.75 0 0 1 19.25 21h-4.5v-6h-5.5v6h-4.5A1.75 1.75 0 0 1 3 20.25V10.5Z" /></svg> },
@@ -471,11 +472,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   const [saleError, setSaleError] = useState("");
   const [cartError, setCartError] = useState("");
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
-  const [remoteMedicines, setRemoteMedicines] = useState<Medicine[]>([]);
-  const [searchTotal, setSearchTotal] = useState(0);
   const [searchPage, setSearchPage] = useState(1);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [searchError, setSearchError] = useState("");
   const [pendingPayment, setPendingPayment] = useState<{ saleId: string; paymentId: string } | null>(null);
   const paymentReturnHandled = useRef(false);
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -558,23 +555,6 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     };
   }, [scannerOpen]);
 
-  const loadRemoteMedicines = useCallback((nextSearch = search.trim(), page = searchPage) => {
-    let active = true;
-    setSearchLoading(true);
-    setSearchError("");
-    void api.searchMedicines(nextSearch, page, 30).then((result) => {
-      if (!active) return;
-      setRemoteMedicines((previous) => page === 1 ? result.medicines : [...previous, ...result.medicines.filter((medicine) => !previous.some((entry) => entry.id === medicine.id))]);
-      setSearchTotal(result.total);
-    }).catch((error) => { if (active) setSearchError(errorMessage(error)); }).finally(() => { if (active) setSearchLoading(false); });
-    return () => { active = false; };
-  }, [search, searchPage]);
-
-  useEffect(() => {
-    const cleanup = loadRemoteMedicines();
-    return cleanup;
-  }, [loadRemoteMedicines]);
-
   const availableStockByMedicine = new Map<string, number>();
   const currentDay = today();
   for (const batch of state.medicineBatches) {
@@ -583,13 +563,11 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   }
   const availableStock = (medicineId: string) => availableStockByMedicine.get(medicineId) ?? 0;
 
-  const visibleCategories = getVisibleCategoryFilters(remoteMedicines, (medicine) => availableStock(medicine.id) > 0);
+  const visibleCategories = getVisibleCategoryFilters(state.medicines, (medicine) => availableStock(medicine.id) > 0);
   const categoryFilters = visibleCategories.includes(category) ? category : "All";
   const selectedCategory = categoryFilters;
-  const items = remoteMedicines.filter((medicine) => {
-    const matchCategory = matchesMedicineCategory(medicine.medicineType, selectedCategory);
-    return matchCategory && availableStock(medicine.id) > 0;
-  });
+  const filteredMedicines = filterPOSMedicines(state.medicines, search, selectedCategory, (medicine) => availableStock(medicine.id) > 0);
+  const items = filteredMedicines.slice(0, searchPage * POS_PAGE_SIZE);
 
   const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
   const requestedDiscount = Number(discount || 0);
@@ -641,7 +619,6 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
       simulated: false,
       items: sale.items.map((item) => ({ ...item, batches: [] })),
     });
-    setRemoteMedicines([]);
     setSearchPage(1);
     setPendingPayment(null);
     setCart([]);
@@ -656,7 +633,6 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
 
   const resetTransaction = () => {
     setReceipt(null);
-    setRemoteMedicines([]);
     setSearch("");
     setCategory("All");
     setSearchPage(1);
@@ -670,7 +646,6 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     setIdempotencyKey(crypto.randomUUID());
     setSaleError("");
     setCartError("");
-    void loadRemoteMedicines("", 1);
   };
 
   const checkPendingPayment = async () => {
@@ -827,7 +802,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
           {scannerError && <div role="status" className="mb-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">{scannerError}</div>}
           <div className="flex flex-wrap gap-2">
             {visibleCategories.map((filter) => (
-              <button key={filter} onClick={() => setCategory(filter)} className={`rounded-full px-3 py-1.5 text-xs font-medium ${selectedCategory === filter ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+              <button key={filter} onClick={() => { setCategory(filter); setSearchPage(1); }} className={`rounded-full px-3 py-1.5 text-xs font-medium ${selectedCategory === filter ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
                 {filter}
               </button>
             ))}
@@ -835,7 +810,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
         </div>
 
         <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
-          {items.length === 0 ? <div className="col-span-full rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">{searchLoading ? "Searching medicines..." : searchError || (search ? "Medicine not found." : "No in-stock, unexpired medicines available.")}</div> : items.map((medicine) => (
+          {items.length === 0 ? <div className="col-span-full rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">{search ? "Medicine not found." : "No in-stock, unexpired medicines available."}</div> : items.map((medicine) => (
             <button key={medicine.id} onClick={() => addToCart(medicine)} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left shadow-sm hover:border-teal-300 hover:bg-white">
               <div className="mb-3 flex items-center justify-between">
                 <span className="rounded-full bg-teal-50 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-teal-700">{medicine.medicineType}</span>
@@ -850,8 +825,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
             </button>
           ))}
         </div>
-        {searchError && items.length > 0 && <div role="alert" className="mx-4 mb-3 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{searchError}</div>}
-        {remoteMedicines.length < searchTotal && <div className="px-4 pb-4 text-center"><button disabled={searchLoading} onClick={() => setSearchPage((page) => page + 1)} className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50">{searchLoading ? "Loading..." : `Load more (${searchTotal - remoteMedicines.length} remaining)`}</button></div>}
+        {items.length < filteredMedicines.length && <div className="px-4 pb-4 text-center"><button onClick={() => setSearchPage((page) => page + 1)} className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700">Load more ({filteredMedicines.length - items.length} remaining)</button></div>}
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">

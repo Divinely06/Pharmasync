@@ -281,6 +281,20 @@ export const matchesMedicineCategory = (medicineType: string, category: string) 
   return matchesCategoryTokens(normalizeCategoryTokens(medicineType), normalizeCategoryTokens(category));
 };
 
+export const filterPOSMedicines = <T extends { brandName: string; genericName: string; barcode: string; medicineType: string }>(
+  medicines: ReadonlyArray<T>,
+  search: string,
+  category: string,
+  isAvailable: (medicine: T) => boolean,
+) => {
+  const query = search.trim().toLowerCase();
+  return medicines.filter((medicine) =>
+    isAvailable(medicine) &&
+    matchesMedicineCategory(medicine.medicineType, category) &&
+    (!query || [medicine.brandName, medicine.genericName, medicine.barcode].some((value) => value.toLowerCase().includes(query))),
+  );
+};
+
 export const getVisibleCategoryFilters = <T extends { medicineType: string; quantity: number; expirationDate: string }>(items: ReadonlyArray<T>, isVisible: (item: T) => boolean) => {
   const available = new Set<string>();
   for (const item of items) {
