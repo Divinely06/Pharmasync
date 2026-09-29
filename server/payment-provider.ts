@@ -7,6 +7,8 @@ export type PaymentResult = { status: PaymentStatus; provider: string; providerR
 
 export const isPaymentInProgress = (status: PaymentStatus) => status === "PENDING" || status === "AUTHORIZED";
 
+export type PayMongoWebhook = { eventId: string | null; eventType: string; liveMode: boolean; providerReference: string };
+
 export const verifyPayMongoWebhookSignature = (rawBody: Buffer, signatureHeader: string | undefined, secret: string, liveMode: boolean) => {
   if (!signatureHeader || !secret) return false;
   const parts = new Map(signatureHeader.split(",").map((part) => {
@@ -17,11 +19,29 @@ export const verifyPayMongoWebhookSignature = (rawBody: Buffer, signatureHeader:
   const signature = parts.get(liveMode ? "li" : "te");
   if (!timestamp || !/^\d+$/.test(timestamp) || !signature || !/^[a-f0-9]{64}$/i.test(signature)) return false;
   const provided = Buffer.from(signature, "hex");
-  const candidates = [rawBody, Buffer.concat([Buffer.from(`${timestamp}.`), rawBody])];
-  return candidates.some((payload) => {
-    const expected = createHmac("sha256", secret).update(payload).digest();
-    return provided.length === expected.length && timingSafeEqual(provided, expected);
-  });
+  const expected = createHmac("sha256", secret).update(Buffer.concat([Buffer.from(`${timestamp}.`), rawBody])).digest();
+  return provided.length === expected.length && timingSafeEqual(provided, expected);
+};
+
+export const parsePayMongoWebhook = (payload: unknown): PayMongoWebhook | null => {
+  if (!payload || typeof payload !== "object") return null;
+  const event = (payload as { data?: unknown }).data;
+  if (!event || typeof event !== "object") return null;
+  const eventData = event as { id?: unknown; attributes?: unknown };
+  if (!eventData.attributes || typeof eventData.attributes !== "object") return null;
+  const attributes = eventData.attributes as { type?: unknown; livemode?: unknown; data?: unknown };
+  if (typeof attributes.type !== "string" || typeof attributes.livemode !== "boolean" || !attributes.data || typeof attributes.data !== "object") return null;
+  const resource = attributes.data as { id?: unknown; type?: unknown; attributes?: unknown };
+  const resourceAttributes = resource.attributes && typeof resource.attributes === "object" ? resource.attributes as { checkout_session_id?: unknown; checkout_session?: unknown } : {};
+  const nestedSession = resourceAttributes.checkout_session && typeof resourceAttributes.checkout_session === "object" ? (resourceAttributes.checkout_session as { id?: unknown }).id : undefined;
+  const reference = resource.type === "checkout_session" ? resource.id : resourceAttributes.checkout_session_id ?? nestedSession;
+  if (typeof reference !== "string" || !reference) return null;
+  return {
+    eventId: typeof eventData.id === "string" ? eventData.id : null,
+    eventType: attributes.type,
+    liveMode: attributes.livemode,
+    providerReference: reference,
+  };
 };
 
 export interface PaymentProvider {

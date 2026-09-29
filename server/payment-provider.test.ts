@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPaymentProvider, DummyPaymentProvider, isPaymentInProgress, verifyPayMongoWebhookSignature } from "./payment-provider.js";
+import { createPaymentProvider, DummyPaymentProvider, isPaymentInProgress, parsePayMongoWebhook, verifyPayMongoWebhookSignature } from "./payment-provider.js";
 
 const request = { saleId: "sale-1", amount: 100, currency: "PHP", method: "GCASH" as const, idempotencyKey: "checkout-1", successUrl: "https://shop.example/success", cancelUrl: "https://shop.example/cancel" };
 
@@ -79,10 +79,19 @@ describe("PayMongo integration", () => {
     expect(verifyPayMongoWebhookSignature(Buffer.from(`${rawBody} `), header, secret, false)).toBe(false);
   });
 
-  it("accepts the documented raw-body HMAC signature", () => {
+  it("accepts only the timestamp-bound HMAC signature", () => {
     const rawBody = Buffer.from('{"data":{"id":"evt_2"}}');
-    const signature = createHmac("sha256", "secret").update(rawBody).digest("hex");
-    expect(verifyPayMongoWebhookSignature(rawBody, `t=1760000000,li=${signature}`, "secret", true)).toBe(true);
+    const timestamp = "1760000000";
+    const signature = createHmac("sha256", "secret").update(`${timestamp}.${rawBody.toString()}`).digest("hex");
+    expect(verifyPayMongoWebhookSignature(rawBody, `t=${timestamp},li=${signature}`, "secret", true)).toBe(true);
+    const rawBodySignature = createHmac("sha256", "secret").update(rawBody).digest("hex");
+    expect(verifyPayMongoWebhookSignature(rawBody, `t=${timestamp},li=${rawBodySignature}`, "secret", true)).toBe(false);
+  });
+
+  it("extracts the checkout session from PayMongo webhook events", () => {
+    expect(parsePayMongoWebhook({ data: { id: "evt_123", attributes: { type: "checkout_session.payment.paid", livemode: true, data: { id: "cs_123", type: "checkout_session" } } } })).toEqual({ eventId: "evt_123", eventType: "checkout_session.payment.paid", liveMode: true, providerReference: "cs_123" });
+    expect(parsePayMongoWebhook({ data: { attributes: { type: "payment.paid", livemode: false, data: { id: "pay_123", type: "payment", attributes: { checkout_session_id: "cs_123" } } } } })).toMatchObject({ providerReference: "cs_123", liveMode: false });
+    expect(parsePayMongoWebhook({ data: { attributes: { type: "payment.paid", data: { id: "pay_123", type: "payment" } } } })).toBeNull();
   });
 
   it.each([["CARD", ["card"]], ["GCASH", ["gcash"]], ["MAYA", ["paymaya"]]] as const)("creates Hosted Checkout for %s", async (method, paymentMethodTypes) => {

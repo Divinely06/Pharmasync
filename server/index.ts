@@ -10,7 +10,7 @@ import { rateLimit } from "express-rate-limit";
 import { auditFilterSchema, buildSessionCookieOptions, inventoryMovementSchema, isRequestOriginAllowed, listFilterSchema, loginSchema, medicineSchema, medicineUpdateSchema, passwordChangeSchema, passwordResetSchema, purchaseSchema, reportFilterSchema, saleSchema, sessionTokenSchema, supplierSchema, userCreateSchema, userUpdateSchema, validateSaleTotals } from "./validation.js";
 import { allocateFefo } from "./inventory.js";
 import { createLogicalBackup, dumpDatabase } from "./backup.js";
-import { createPaymentProvider, isPaymentInProgress, verifyPayMongoWebhookSignature, type PaymentMethod, type PaymentStatus } from "./payment-provider.js";
+import { createPaymentProvider, isPaymentInProgress, parsePayMongoWebhook, verifyPayMongoWebhookSignature, type PaymentMethod, type PaymentStatus } from "./payment-provider.js";
 import { applyDatabaseSchema, missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from "./db.js";
 
 const connectionString = normalizeDatabaseUrl(process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI ?? "");
@@ -52,16 +52,15 @@ const logError = (event: string, error: unknown) => {
   console.error(JSON.stringify({ level: "error", event, message: redactedMessage, code: (error as { code?: string })?.code ?? null, timestamp: new Date().toISOString() }));
 };
 
-app.use(express.json({ limit: "64kb" }));
+app.use(express.json({
+  limit: "64kb",
+  verify: (req, _res, body) => {
+    if (req.url?.split("?")[0] === "/api/webhooks/paymongo") (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(body);
+  },
+}));
 app.use((req, res, next) => {
   const origin = req.header("Origin");
   if (req.path === "/api/webhooks/paymongo" && !origin) return next();
-  app.use(express.json({
-    limit: "64kb",
-    verify: (req, _res, body) => {
-      if (req.url?.split("?")[0] === "/api/webhooks/paymongo") (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(body);
-    },
-  }));
   const allowedOrigin = process.env.CLIENT_ORIGIN;
   if (!isRequestOriginAllowed(req.method, origin, allowedOrigin, production)) return res.status(403).json({ code: "ORIGIN_REJECTED", error: "Request origin is not allowed" });
   const configuredOrigins = (allowedOrigin ?? "").split(",").map((entry) => entry.trim().replace(/\/$/, ""));
@@ -133,6 +132,41 @@ const fulfillSale = async (client: PoolClient, saleId: string, userId: string) =
   }
   await client.query("UPDATE sales SET status='COMPLETED' WHERE id=$1", [saleId]);
 };
+const reconcilePayment = async (paymentId: string, remote: Awaited<ReturnType<typeof paymentProvider.getPayment>>, source: string, eventId?: string | null) => {
+  if (!remote) return null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const locked = await client.query('SELECT p.status,p.provider,p.provider_reference,p.amount::float AS amount,s.id AS sale_id,s.status AS sale_status,s.cashier_id FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1 FOR UPDATE OF p,s', [paymentId]);
+    if (!locked.rowCount) { await client.query("COMMIT"); return null; }
+    const current = locked.rows[0];
+    if (!isPaymentInProgress(current.status) || remote.status === current.status || remote.status === "PENDING") {
+      await client.query("COMMIT");
+      return current.status as PaymentStatus;
+    }
+    if (!["AUTHORIZED", "PAID", "FAILED", "CANCELLED", "EXPIRED"].includes(remote.status)) {
+      await client.query("COMMIT");
+      return current.status as PaymentStatus;
+    }
+    if (current.provider === "PAYMONGO" && remote.status === "PAID" && (remote.referenceNumber !== current.sale_id || remote.amountMinor !== Math.round(current.amount * 100) || remote.currency?.toUpperCase() !== "PHP")) {
+      throw Object.assign(new Error("Provider payment details do not match this sale"), { status: 409, code: "PAYMENT_DETAILS_MISMATCH" });
+    }
+    if (remote.status === "PAID") {
+      if (current.sale_status !== "PENDING") throw Object.assign(new Error("Sale is not awaiting payment"), { status: 409, code: "INVALID_PAYMENT_STATE" });
+      await fulfillSale(client,current.sale_id,current.cashier_id);
+    } else if (["FAILED", "CANCELLED", "EXPIRED"].includes(remote.status)) {
+      await client.query("UPDATE sales SET status='VOIDED' WHERE id=$1 AND status='PENDING'", [current.sale_id]);
+    }
+    await client.query("UPDATE payment_records SET status=$2,updated_at=now() WHERE id=$1", [paymentId,remote.status]);
+    await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,$3,$4,'PROVIDER_UPDATE',$5,$6)", [`payment-event-${randomUUID()}`,paymentId,current.status,current.cashier_id,{ provider:current.provider,providerReference:current.provider_reference,source,eventId:eventId ?? null }]);
+    await audit(client,current.cashier_id,remote.status === "PAID" ? "PAYMENT_PAID" : "PAYMENT_STATUS_UPDATED","PAYMENT",paymentId,{ provider:current.provider,saleId:current.sale_id,status:remote.status,source,eventId:eventId ?? null });
+    await client.query("COMMIT");
+    return remote.status;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally { client.release(); }
+};
 const withClient = async <T>(operation: (client: PoolClient) => Promise<T>): Promise<T> => {
   const client = await pool.connect();
   try { return await operation(client); }
@@ -153,6 +187,23 @@ app.get("/api/health", async (_req, res) => {
     if ((error as { code?: string }).code === "53300") return res.status(503).json({ ok: false, code: "DATABASE_BUSY", error: "Database connection capacity is exhausted" });
     res.status(503).json({ ok: false, code: "DATABASE_UNAVAILABLE", error: "Database is unavailable" });
   }
+});
+app.post("/api/webhooks/paymongo", async (req, res) => {
+  if (paymentProviderMode !== "paymongo") return res.status(503).json({ code: "PAYMENT_PROVIDER_DISABLED", error: "PayMongo webhooks are not enabled" });
+  const webhookSecret = process.env.PAYMONGO_WEBHOOK_SECRET;
+  const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
+  const event = parsePayMongoWebhook(req.body);
+  if (!webhookSecret) return res.status(503).json({ code: "WEBHOOK_NOT_CONFIGURED", error: "PayMongo webhook signing secret is required" });
+  if (!rawBody || !event) return res.status(400).json({ code: "INVALID_WEBHOOK", error: "PayMongo webhook payload is invalid" });
+  if (!verifyPayMongoWebhookSignature(rawBody, req.header("PayMongo-Signature"), webhookSecret, event.liveMode)) {
+    return res.status(401).json({ code: "INVALID_WEBHOOK_SIGNATURE", error: "PayMongo webhook signature is invalid" });
+  }
+  const payment = await pool.query("SELECT id,status FROM payment_records WHERE provider='PAYMONGO' AND provider_reference=$1", [event.providerReference]);
+  if (!payment.rowCount || !isPaymentInProgress(payment.rows[0].status)) return res.status(200).json({ received: true });
+  const remote = await paymentProvider.getPayment(event.providerReference);
+  if (!remote) return res.status(503).json({ code: "PAYMENT_PROVIDER_UNAVAILABLE", error: "Could not confirm the PayMongo payment state" });
+  await reconcilePayment(payment.rows[0].id,remote,`WEBHOOK:${event.eventType}`,event.eventId);
+  res.status(200).json({ received: true });
 });
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false, message: { code: "RATE_LIMITED", error: "Too many login attempts. Try again later." } });
 const backupLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 1, standardHeaders: "draft-8", legacyHeaders: false, skipFailedRequests: true, message: { code: "RATE_LIMITED", error: "A backup was already requested recently" } });
@@ -750,29 +801,7 @@ app.get("/api/payments/:id", auth, async (req: AuthRequest, res) => {
   const current = result.rows[0];
   if (isPaymentInProgress(current.status) && current.providerReference) {
     const remote = await paymentProvider.getPayment(current.providerReference);
-    if (remote && remote.status !== current.status) {
-      if (current.provider === "PAYMONGO" && remote.status === "PAID" && (remote.referenceNumber !== current.saleId || remote.amountMinor !== Math.round(current.amount * 100) || remote.currency?.toUpperCase() !== "PHP")) {
-        return res.status(409).json({ code: "PAYMENT_DETAILS_MISMATCH", error: "Provider payment details do not match this sale" });
-      }
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const locked = await client.query('SELECT p.status,p.sale_id,s.status AS sale_status FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1 FOR UPDATE OF p,s', [current.id]);
-        if (locked.rowCount && isPaymentInProgress(locked.rows[0].status) && remote.status !== "PENDING") {
-          if (remote.status === "PAID") {
-            if (locked.rows[0].sale_status !== "PENDING") throw Object.assign(new Error("Sale is not awaiting payment"), { status: 409, code: "INVALID_PAYMENT_STATE" });
-            await fulfillSale(client,current.saleId,req.user!.id);
-          } else if (["FAILED", "CANCELLED", "EXPIRED"].includes(remote.status)) {
-            await client.query("UPDATE sales SET status='VOIDED' WHERE id=$1 AND status='PENDING'", [current.saleId]);
-          }
-          await client.query("UPDATE payment_records SET status=$2,updated_at=now() WHERE id=$1", [current.id,remote.status]);
-          await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,$3,$4,'PROVIDER_UPDATE',$5,$6)", [`payment-event-${randomUUID()}`,current.id,locked.rows[0].status,remote.status,req.user!.id,{ provider:current.provider,providerReference:current.providerReference }]);
-          await audit(client,req.user!.id,remote.status === "PAID" ? "PAYMENT_PAID" : "PAYMENT_STATUS_UPDATED","PAYMENT",current.id,{ provider:current.provider,saleId:current.saleId,status:remote.status });
-        }
-        await client.query("COMMIT");
-      } catch (error) { await client.query("ROLLBACK"); throw error; }
-      finally { client.release(); }
-    }
+    if (remote) await reconcilePayment(current.id,remote,"STATUS_CHECK");
   }
   const latest = await pool.query('SELECT id,sale_id AS "saleId",status,provider,provider_reference AS "providerReference" FROM payment_records WHERE id=$1', [current.id]);
   res.json(latest.rows[0]);
