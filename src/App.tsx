@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   AccessArea,
   AuditLog,
@@ -19,27 +19,14 @@ import {
   stopMediaStream,
 } from "./data";
 import { ApiError, api, type ReceiptData, type ReportData } from "./api";
-import {
-  BarChart,
-  Bar,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+
+const DashboardCharts = lazy(() => import("./components/DashboardCharts"));
+const ReportCharts = lazy(() => import("./components/ReportCharts"));
 
 type Page = "dashboard" | "pos" | "inventory" | "suppliers" | "users" | "audit" | "backups" | "reports";
 
 type CartItem = Medicine & { quantity: number };
 
-const PIE_COLORS = ["#0d9488", "#6366f1", "#f59e0b", "#ec4899", "#22c55e"];
 const pharmaBackground = "/background-phar.jpg";
 const appLogo = "/dashboard-logo.png";
 
@@ -85,15 +72,6 @@ const today = () => dateKey(new Date());
 const daysUntil = (date: string | Date) => (Date.parse(`${dateKey(date)}T00:00:00Z`) - Date.parse(`${today()}T00:00:00Z`)) / 86400000;
 const isExpiringSoon = (date: string | Date) => daysUntil(date) > 0 && daysUntil(date) <= 90;
 const transactionTimeFormatter = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
-const chartCurrency = (value: number) => {
-  if (value === 0) return "₱0";
-  if (Math.abs(value) >= 1000) {
-    const thousands = value / 1000;
-    return `₱${Number(thousands.toFixed(thousands < 10 ? 1 : 0))}k`;
-  }
-  return fmt(value);
-};
-
 function App() {
   const [state, setState] = useState<PharmacyState>(emptyState);
   const [page, setPage] = useState<Page>("dashboard");
@@ -443,39 +421,9 @@ function DashboardPage({ state, onNavigate, onLowStock, onExpiringSoon }: { stat
         <StatCard title="Expiring Soon" value={String(expiringSoon.length)} sub="Under 90 days" onClick={onExpiringSoon} icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5"><path d="M12 6.5V12l3.2 2.2" /><circle cx="12" cy="12" r="7.5" /><path d="M4.5 7.5h3" /><path d="M16.5 7.5h3" /></svg>} accent="bg-rose-50 text-rose-600" />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-5 flex items-center justify-between">
-            <div>
-              <div className="text-sm font-bold text-slate-900">Weekly Revenue</div>
-              <div className="text-xs text-slate-500">Last 7 days</div>
-            </div>
-            <div className="text-xs text-slate-500">Live data</div>
-          </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={weeklySales}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-              <XAxis dataKey="day" tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} />
-              <YAxis domain={[0, "auto"]} tickCount={5} tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(value) => chartCurrency(Number(value ?? 0))} />
-              <Tooltip formatter={(value) => fmt(Number(value ?? 0))} />
-              <Bar dataKey="revenue" radius={[8, 8, 0, 0]} fill="#0d9488" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-5 text-sm font-bold text-slate-900">Payment Mix</div>
-          <ResponsiveContainer width="100%" height={220}>
-            <PieChart>
-              <Pie data={paymentBreakdown.map(([name, value]) => ({ name, value }))} dataKey="value" innerRadius={45} outerRadius={75} paddingAngle={3}>
-                {paymentBreakdown.map((entry, index) => <Cell key={entry[0]} fill={PIE_COLORS[index % PIE_COLORS.length]} />)}
-              </Pie>
-              <Tooltip formatter={(value) => fmt(Number(value ?? 0))} />
-              <Legend />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
+      <Suspense fallback={<div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]" aria-busy="true"><div className="min-h-[300px] rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" /><div className="min-h-[300px] rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" /></div>}>
+        <DashboardCharts weeklySales={weeklySales} paymentBreakdown={paymentBreakdown} />
+      </Suspense>
 
       <div>
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -1715,23 +1663,9 @@ function ReportsPage({ state }: { state: PharmacyState }) {
         <ReportMetric label="Inventory Value" value={fmt(inventoryValue)} note={`${lowStock} low stock · ${report?.inventory.expiring_soon_count ?? 0} expiring soon`} color="text-slate-900" />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1.55fr_1fr]">
-        <ReportPanel title="Monthly Revenue" subtitle="Revenue by transaction month">
-          <ResponsiveContainer width="100%" height={240}><BarChart data={monthlyRevenue}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} /><XAxis dataKey="month" tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(value) => fmt(Number(value ?? 0))} /><Tooltip formatter={(value) => fmt(Number(value ?? 0))} /><Bar dataKey="revenue" radius={[5, 5, 0, 0]} fill="#0f8587" /></BarChart></ResponsiveContainer>
-        </ReportPanel>
-        <ReportPanel title="Sales by Category" subtitle="Dispensed units by medicine type">
-          <ResponsiveContainer width="100%" height={240}><PieChart><Pie data={byCategory} dataKey="value" nameKey="name" innerRadius={58} outerRadius={86} paddingAngle={3}>{byCategory.map((entry, index) => <Cell key={entry.name} fill={PIE_COLORS[index % PIE_COLORS.length]} />)}</Pie><Tooltip /><Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} /></PieChart></ResponsiveContainer>
-        </ReportPanel>
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-[1.1fr_1fr]">
-        <ReportPanel title="Stock Movement" subtitle="Received and dispensed units">
-          <ResponsiveContainer width="100%" height={220}><LineChart data={movement}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} /><XAxis dataKey="month" tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} /><Tooltip /><Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} /><Line type="monotone" dataKey="received" name="Received" stroke="#0f8587" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="dispensed" name="Dispensed" stroke="#32b4a4" strokeWidth={2} strokeDasharray="4 3" dot={false} /></LineChart></ResponsiveContainer>
-        </ReportPanel>
-        <ReportPanel title="Top Selling Items" subtitle="Ranked by units dispensed">
-          <div className="space-y-3 pt-2">{topSelling.length === 0 ? <div className="py-12 text-center text-sm text-slate-400">No completed sales yet.</div> : topSelling.map((item, index) => <div key={item.name}><div className="mb-1 flex items-center gap-2 text-xs"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-teal-50 font-bold text-teal-700">{index + 1}</span><span className="min-w-0 flex-1 truncate font-semibold text-slate-700">{item.name}</span><span className="font-bold text-slate-800">{item.quantity}</span></div><div className="ml-7 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-teal-600" style={{ width: `${Math.max(8, (item.quantity / topSelling[0].quantity) * 100)}%` }} /></div><div className="ml-7 mt-1 text-[10px] text-slate-400">{fmt(item.revenue)} revenue</div></div>)}</div>
-        </ReportPanel>
-      </div>
+      <Suspense fallback={<div className="space-y-5" aria-busy="true"><div className="grid gap-5 xl:grid-cols-[1.55fr_1fr]"><div className="min-h-[300px] rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" /><div className="min-h-[300px] rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" /></div><div className="grid gap-5 xl:grid-cols-[1.1fr_1fr]"><div className="min-h-[280px] rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" /><div className="min-h-[280px] rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" /></div></div>}>
+        <ReportCharts monthlyRevenue={monthlyRevenue} byCategory={byCategory} movement={movement} topSelling={topSelling} />
+      </Suspense>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="mb-3"><div className="text-sm font-bold text-slate-900">Generate Reports</div><div className="text-xs text-slate-500">Download structured reports for inventory and business monitoring</div></div><div className="grid gap-3 md:grid-cols-2"><ReportDownload title="Monthly Inventory Report" format="CSV" description="Stock levels, reorder points, and expiration dates" onClick={exportInventory} /><ReportDownload title="Sales Transaction Log" format="CSV" description="Completed transactions and payment details" onClick={exportSales} /><ReportDownload title="Revenue Summary" format="CSV" description="Revenue totals by payment method" onClick={() => download("revenue-summary.csv", [["Payment method", "Revenue"], ...revenueByPayment.map((entry) => [entry.name, String(entry.value)])])} /><ReportDownload title="Low Stock Alert Report" format="CSV" description="Items below their configured reorder level" onClick={() => download("low-stock-report.csv", [["Medicine", "Current stock", "Reorder level"], ...state.medicines.filter((medicine) => medicine.quantity <= medicine.reorderLevel).map((medicine) => [medicine.brandName, String(medicine.quantity), String(medicine.reorderLevel)])])} /></div></div>
     </div>
@@ -1740,10 +1674,6 @@ function ReportsPage({ state }: { state: PharmacyState }) {
 
 function ReportMetric({ label, value, note, color }: { label: string; value: string; note: string; color: string }) {
   return <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div><div className={`mt-2 text-2xl font-bold ${color}`}>{value}</div><div className="mt-1 text-[11px] text-slate-500">{note}</div></div>;
-}
-
-function ReportPanel({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
-  return <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="mb-2"><div className="text-sm font-bold text-slate-900">{title}</div><div className="text-[11px] text-slate-500">{subtitle}</div></div>{children}</div>;
 }
 
 function ReportDownload({ title, format, description, onClick }: { title: string; format: string; description: string; onClick: () => void }) {
