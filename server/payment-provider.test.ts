@@ -94,7 +94,7 @@ describe("PayMongo integration", () => {
     expect(parsePayMongoWebhook({ data: { attributes: { type: "payment.paid", data: { id: "pay_123", type: "payment" } } } })).toBeNull();
   });
 
-  it.each([["CARD", ["card"]], ["GCASH", ["gcash"]], ["MAYA", ["paymaya"]]] as const)("creates Hosted Checkout for %s", async (method, paymentMethodTypes) => {
+  it.each([["CARD", ["card"]], ["GCASH", ["gcash"]], ["MAYA", ["paymaya"]], ["QRPH", ["qrph"]]] as const)("creates Hosted Checkout for %s", async (method, paymentMethodTypes) => {
     await withPayMongoEnvironment(async () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: { id: "cs_123", attributes: { checkout_url: "https://checkout.paymongo.com/cs_123" } } }) });
       globalThis.fetch = fetchMock as typeof fetch;

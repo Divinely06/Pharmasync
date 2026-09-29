@@ -893,7 +893,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
             <div>
               <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Payment</label>
               <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-                {['Cash', 'GCash', 'Maya', 'Card'].map((method) => <option key={method}>{method}</option>)}
+                {['Cash', 'GCash', 'Maya', 'QRPh', 'Card'].map((method) => <option key={method}>{method}</option>)}
               </select>
             </div>
             <div>

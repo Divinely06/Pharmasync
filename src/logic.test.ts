@@ -222,6 +222,7 @@ describe('write request validation', () => {
   it('rejects non-positive sale quantities and missing idempotency keys', () => {
     expect(saleSchema.safeParse({ items: [{ medicineId: 'med-1', quantity: 0 }], paymentMethod: 'Cash' }).success).toBe(false);
     expect(saleSchema.safeParse({ items: [{ medicineId: 'med-1', quantity: 1 }], paymentMethod: 'Cash' }).success).toBe(false);
+    expect(saleSchema.safeParse({ items: [{ medicineId: 'med-1', quantity: 1 }], paymentMethod: 'QRPh', idempotencyKey: 'qrph-attempt-1' }).success).toBe(true);
   });
 
   it('rejects impossible cash totals before a sale reaches the database', () => {

@@ -101,12 +101,12 @@ export const saleSchema = z.object({
   discount: nonNegativeMoney.default(0),
   discountType: z.enum(["none", "pwd", "senior"]).default("none"),
   discountId: z.string().trim().max(100).default(""),
-  paymentMethod: z.enum(["Cash", "GCash", "Maya", "Card"]),
+  paymentMethod: z.enum(["Cash", "GCash", "Maya", "QRPh", "Card"]),
   amountReceived: nonNegativeMoney.optional(),
   idempotencyKey: requiredText(100),
 });
 
-export const validateSaleTotals = ({ subtotal, discount, tax, amountReceived, paymentMethod }: { subtotal: number; discount: number; tax: number; amountReceived?: number; paymentMethod: "Cash" | "GCash" | "Maya" | "Card" }) => {
+export const validateSaleTotals = ({ subtotal, discount, tax, amountReceived, paymentMethod }: { subtotal: number; discount: number; tax: number; amountReceived?: number; paymentMethod: "Cash" | "GCash" | "Maya" | "QRPh" | "Card" }) => {
   const normalizedSubtotal = Number(Number(subtotal).toFixed(2));
   const normalizedDiscount = Number(Number(discount).toFixed(2));
   const normalizedTax = Number(Number(tax).toFixed(2));

@@ -211,7 +211,7 @@ const createOrRecoverCheckout = async (paymentId: string) => {
   successUrl.searchParams.set("payment_return", "success");
   const cancelUrl = new URL(returnUrl);
   cancelUrl.searchParams.set("payment_return", "cancel");
-  const method: PaymentMethod = current.paymentMethod === "Card" ? "CARD" : current.paymentMethod === "GCash" ? "GCASH" : "MAYA";
+  const method: PaymentMethod = current.paymentMethod === "Card" ? "CARD" : current.paymentMethod === "GCash" ? "GCASH" : current.paymentMethod === "QRPh" ? "QRPH" : "MAYA";
   const createdPayment = await paymentProvider.createPayment({ saleId:current.saleId,amount:current.amount,currency:"PHP",method,idempotencyKey:current.idempotencyKey,successUrl:successUrl.toString(),cancelUrl:cancelUrl.toString() });
   const client = await pool.connect();
   try {

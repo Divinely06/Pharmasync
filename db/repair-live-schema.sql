@@ -11,6 +11,9 @@ UPDATE purchases SET created_at=COALESCE(created_at,purchase_date,now()),updated
 ALTER TABLE purchases ALTER COLUMN created_at SET DEFAULT now();
 ALTER TABLE purchases ALTER COLUMN updated_at SET DEFAULT now();
 
+ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_payment_method_check;
+ALTER TABLE sales ADD CONSTRAINT sales_payment_method_check CHECK (payment_method IN ('Cash','GCash','Maya','QRPh','Card'));
+
 ALTER TABLE payment_records ADD COLUMN IF NOT EXISTS refund_amount NUMERIC(12,2) DEFAULT 0;
 ALTER TABLE payment_records ADD COLUMN IF NOT EXISTS refund_status TEXT;
 ALTER TABLE payment_records ADD COLUMN IF NOT EXISTS refund_provider_reference TEXT;

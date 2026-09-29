@@ -1,6 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
-export type PaymentMethod = "CARD" | "GCASH" | "MAYA";
+export type PaymentMethod = "CARD" | "GCASH" | "MAYA" | "QRPH";
 export type PaymentStatus = "PENDING" | "AUTHORIZED" | "PAID" | "FAILED" | "CANCELLED" | "EXPIRED" | "REFUNDED";
 export type PaymentRequest = { saleId: string; amount: number; currency: string; method: PaymentMethod; idempotencyKey: string; successUrl?: string; cancelUrl?: string };
 export type PaymentResult = { status: PaymentStatus; provider: string; providerReference: string | null; checkoutUrl?: string; paymentReference?: string; referenceNumber?: string; amountMinor?: number; currency?: string; failureCode?: string };
@@ -275,7 +275,7 @@ export class PayMongoProvider extends SandboxPaymentProvider {
   }
 
   async createPayment(request: PaymentRequest): Promise<PaymentResult> {
-    const paymentMethodTypes = request.method === "CARD" ? ["card"] : request.method === "GCASH" ? ["gcash"] : ["paymaya"];
+    const paymentMethodTypes = request.method === "CARD" ? ["card"] : request.method === "GCASH" ? ["gcash"] : request.method === "QRPH" ? ["qrph"] : ["paymaya"];
     if (!request.successUrl || !request.cancelUrl) throw new Error("PayMongo checkout return URLs are required");
     const payload = await this.request<{ data?: { id?: string; attributes?: { checkout_url?: string } } }>("/checkout_sessions", {
       method: "POST",
