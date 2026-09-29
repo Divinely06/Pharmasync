@@ -134,9 +134,16 @@ const fulfillSale = async (client: PoolClient, saleId: string, userId: string) =
   }
   await client.query("UPDATE sales SET status='COMPLETED' WHERE id=$1", [saleId]);
 };
-const reconcilePayment = async (paymentId: string, remote: Awaited<ReturnType<typeof paymentProvider.getPayment>>, source: string, eventId?: string | null) => {
+const reconcilePayment = async (paymentId: string, remote: Awaited<ReturnType<typeof paymentProvider.getPayment>>, source: string, eventId?: string | null, retryConnectionError = true) => {
   if (!remote) return null;
-  const client = await pool.connect();
+  let client: PoolClient;
+  try { client = await pool.connect(); }
+  catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (retryConnectionError && typeof code === "string" && code.startsWith("08")) return reconcilePayment(paymentId,remote,source,eventId,false);
+    throw error;
+  }
+  let released = false;
   try {
     await client.query("BEGIN");
     const locked = await client.query('SELECT p.status,p.provider,p.provider_reference,p.amount::float AS amount,s.id AS sale_id,s.status AS sale_status,s.cashier_id FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1 FOR UPDATE OF p,s', [paymentId]);
@@ -165,9 +172,16 @@ const reconcilePayment = async (paymentId: string, remote: Awaited<ReturnType<ty
     await client.query("COMMIT");
     return remote.status;
   } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && code.startsWith("08")) {
+      client.release(error instanceof Error ? error : new Error("PostgreSQL connection failure"));
+      released = true;
+      if (retryConnectionError) return reconcilePayment(paymentId,remote,source,eventId,false);
+      throw error;
+    }
     await client.query("ROLLBACK");
     throw error;
-  } finally { client.release(); }
+  } finally { if (!released) client.release(); }
 };
 const reconcileRefund = async (paymentId: string, refund: Awaited<ReturnType<typeof paymentProvider.refundPayment>>, requestedAmount: number, userId: string) => {
   if (!refund) return null;
@@ -1018,6 +1032,7 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (res.headersSent) return;
   const code = (error as { code?: string }).code;
   if (code === "53300") return res.status(503).json({ code: "DATABASE_BUSY", error: "The database is temporarily at its connection limit. Please retry shortly." });
+  if (code?.startsWith("08")) return res.status(503).json({ code: "DATABASE_CONNECTION_ERROR", error: "The database connection failed while confirming payment. Check the payment status again; do not start another checkout." });
   if (code === "23514") return res.status(409).json({ code: "INVALID_STATE", error: "The sale totals or stock are inconsistent. Please refresh and try again." });
   if (code === "23505") return res.status(409).json({ code: "CONFLICT", error: "A record with these details already exists" });
   if (code === "23503") return res.status(400).json({ code: "INVALID_REFERENCE", error: "A referenced record does not exist" });

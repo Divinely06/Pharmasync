@@ -21,6 +21,20 @@ An unauthenticated `GET /api/session` returns `401 UNAUTHORIZED` by design; it i
 
 Cashless POS methods support a dummy demo provider and hosted PayMongo checkout. Keep `PAYMENT_PROVIDER=dummy` for local demo behavior and set `DUMMY_PAYMENT_OUTCOME` to `success`, `pending`, `failure`, `cancelled`, or `timeout` to exercise controlled outcomes. For real checkout, set `PAYMENT_PROVIDER=paymongo`, `PAYMONGO_BASE_URL=https://api.paymongo.com/v1`, and `PAYMONGO_SECRET_KEY`. In the PayMongo dashboard, register `https://<your-app-origin>/api/webhooks/paymongo`, subscribe to `checkout_session.payment.paid`, and set `PAYMONGO_WEBHOOK_SECRET` to that endpoint's signing secret. The endpoint verifies the raw request signature and confirms payment details with PayMongo before updating inventory; status checks remain available as a fallback. In production, simulated cashless checkout is disabled unless `ALLOW_SIMULATED_PAYMENTS=true` is explicitly set. No card or wallet credentials are collected by the demo flow. Production backup/restore, purchase receiving, and several admin workflows are not configured by this demo implementation and must not be treated as production-ready.
 
+For local PayMongo testing, set `PAYMENT_PROVIDER=paymongo`, `PAYMONGO_SECRET_KEY` to the matching PayMongo test secret key, and `CLIENT_ORIGIN=http://localhost:4175` in `.env`; `PAYMONGO_BASE_URL` defaults to `https://api.paymongo.com/v1`. Set `PAYMONGO_WEBHOOK_SECRET` only when testing webhooks. Keep `DATABASE_URL` pointed at the intended PostgreSQL database and use test keys for test checkouts.
+
+For Vercel, add these under **Project Settings > Environment Variables** for each environment where you run the app, then redeploy:
+
+- `DATABASE_URL`: the PostgreSQL connection URI, with SSL required and Vercel permitted by the database network/access rules.
+- `CLIENT_ORIGIN`: the exact browser-app origin, for example `https://your-project.vercel.app` (no path or trailing slash).
+- `PAYMENT_PROVIDER`: `paymongo`.
+- `PAYMONGO_SECRET_KEY`: the PayMongo test or live secret key matching the desired payment mode.
+- `PAYMONGO_WEBHOOK_SECRET`: the signing secret for the registered `/api/webhooks/paymongo` endpoint.
+- `PAYMONGO_BASE_URL`: optional; defaults to `https://api.paymongo.com/v1`.
+- `DB_POOL_MAX`: optional; keep at `1` for the Vercel serverless API unless the database provider recommends another pool size.
+
+Vercel supplies `NODE_ENV` and manages `PORT`; do not add either manually. `ALLOW_SIMULATED_PAYMENTS` should remain unset or `false` for real production payments. Configure the webhook URL and secret from the same PayMongo mode (test or live) as the secret key. Never put secret keys in `VITE_*` variables because they would be exposed to the browser.
+
 Admin backups use the system `pg_dump` executable, write private custom-format files below `BACKUP_DIRECTORY`, and record status/metadata in PostgreSQL. Install the PostgreSQL client tools on the API host. To test a restore, create a disposable database and use `pg_restore --no-owner --no-privileges --dbname="$RESTORE_DATABASE_URL" "$BACKUP_FILE"`; never restore over the live database. Restore verification remains an operator/deployment step.
 
 For Clever Cloud, use `POSTGRESQL_ADDON_URI` and keep the application and PostgreSQL addon in the same region where possible. Use `pnpm start` for the API; it reads Clever Cloud's `PORT` variable automatically.
