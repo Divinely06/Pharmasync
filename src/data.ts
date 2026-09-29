@@ -102,6 +102,7 @@ export type SaleRecord = {
   discount: number
   tax: number
   totalAmount: number
+  refundAmount?: number
   paymentMethod: string
   amountReceived: number
   changeAmount: number
@@ -114,6 +115,9 @@ export type SaleRecord = {
     subtotal: number
   }[]
 }
+
+export const netSaleAmount = (sale: Pick<SaleRecord, "totalAmount" | "refundAmount">) =>
+  Math.max(0, sale.totalAmount - (sale.refundAmount ?? 0));
 
 export type InventoryTransaction = {
   id: string
@@ -260,30 +264,33 @@ const normalizeCategoryTokens = (value: string) =>
     .map((part) => part.replace(/s\b/g, "").replace(/[^a-z0-9]/g, ""))
     .filter(Boolean);
 
-export const matchesMedicineCategory = (medicineType: string, category: string) => {
-  if (category === "All") return true;
+const visibleCategoryTokens = CATEGORIES
+  .filter((category) => category !== "All")
+  .map((category) => [category, normalizeCategoryTokens(category)] as const);
 
-  const itemTokens = normalizeCategoryTokens(medicineType);
-  const categoryTokens = normalizeCategoryTokens(category);
-
+const matchesCategoryTokens = (itemTokens: string[], categoryTokens: string[]) => {
   if (!itemTokens.length || !categoryTokens.length) return false;
-
   if (categoryTokens.length === 1) {
     return itemTokens.includes(categoryTokens[0]) || itemTokens.some((token) => token.includes(categoryTokens[0]));
   }
-
   return categoryTokens.every((token) => itemTokens.includes(token));
+};
+
+export const matchesMedicineCategory = (medicineType: string, category: string) => {
+  if (category === "All") return true;
+  return matchesCategoryTokens(normalizeCategoryTokens(medicineType), normalizeCategoryTokens(category));
 };
 
 export const getVisibleCategoryFilters = <T extends { medicineType: string; quantity: number; expirationDate: string }>(items: ReadonlyArray<T>, isVisible: (item: T) => boolean) => {
   const available = new Set<string>();
-  const categories = CATEGORIES.filter((category) => category !== "All");
-  for (const category of categories) {
-    if (items.some((item) => matchesMedicineCategory(item.medicineType, category) && isVisible(item))) {
-      available.add(category);
+  for (const item of items) {
+    if (!isVisible(item)) continue;
+    const itemTokens = normalizeCategoryTokens(item.medicineType);
+    for (const [category, tokens] of visibleCategoryTokens) {
+      if (matchesCategoryTokens(itemTokens, tokens)) available.add(category);
     }
   }
-  return ["All", ...available];
+  return ["All", ...visibleCategoryTokens.filter(([category]) => available.has(category)).map(([category]) => category)];
 };
 
 export const fmt = (n: number) =>

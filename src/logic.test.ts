@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CATEGORIES, canAccess, buildAuditLog, calculateTotals, dateKey, generateMedicineBarcode, getVisibleCategoryFilters, matchesMedicineCategory, stopMediaStream } from './data';
+import { CATEGORIES, canAccess, buildAuditLog, calculateTotals, dateKey, generateMedicineBarcode, getVisibleCategoryFilters, matchesMedicineCategory, netSaleAmount, stopMediaStream } from './data';
 import { api } from './api';
 import { missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from '../server/db';
 import { buildSessionCookieOptions, isRequestOriginAllowed, loginSchema, medicineSchema, passwordChangeSchema, passwordResetSchema, saleSchema, sessionTokenSchema, userCreateSchema, validateSaleTotals } from '../server/validation';
@@ -10,6 +10,12 @@ afterEach(() => {
 });
 
 describe('pharmacy system logic', () => {
+  it('calculates sale revenue after refunds without going below zero', () => {
+    expect(netSaleAmount({ totalAmount: 100, refundAmount: 25 })).toBe(75);
+    expect(netSaleAmount({ totalAmount: 100 })).toBe(100);
+    expect(netSaleAmount({ totalAmount: 100, refundAmount: 125 })).toBe(0);
+  });
+
   it('allows admin access to reports and inventory', () => {
     expect(canAccess('ADMIN', 'REPORTS')).toBe(true);
     expect(canAccess('ADMIN', 'AUDIT')).toBe(true);
@@ -64,6 +70,21 @@ describe('pharmacy system logic', () => {
     ] as const;
 
     expect(getVisibleCategoryFilters(medicines, (medicine) => medicine.quantity > 0)).toEqual(['All', 'Cardiovascular']);
+  });
+
+  it('preserves taxonomy order for overlapping visible categories', () => {
+    const medicines = [
+      { medicineType: 'Cardiovascular/Lipid', quantity: 5, expirationDate: '2030-01-01' },
+      { medicineType: 'Antibiotic', quantity: 3, expirationDate: '2030-01-01' },
+      { medicineType: 'Respiratory', quantity: 0, expirationDate: '2030-01-01' },
+    ];
+
+    expect(getVisibleCategoryFilters(medicines, (medicine) => medicine.quantity > 0)).toEqual([
+      'All',
+      'Antibiotic',
+      'Cardiovascular',
+      'Cardiovascular/Lipid',
+    ]);
   });
 
   it('creates audit entries with clear metadata', () => {

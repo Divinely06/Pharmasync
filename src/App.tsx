@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   AccessArea,
   AuditLog,
@@ -15,31 +15,19 @@ import {
   generateMedicineBarcode,
   getVisibleCategoryFilters,
   matchesMedicineCategory,
+  netSaleAmount,
   normalizeBarcode,
   stopMediaStream,
 } from "./data";
 import { ApiError, api, type ReceiptData, type ReportData } from "./api";
-import {
-  BarChart,
-  Bar,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+
+const DashboardCharts = lazy(() => import("./components/DashboardCharts"));
+const ReportCharts = lazy(() => import("./components/ReportCharts"));
 
 type Page = "dashboard" | "pos" | "inventory" | "suppliers" | "users" | "audit" | "backups" | "reports";
 
 type CartItem = Medicine & { quantity: number };
 
-const PIE_COLORS = ["#0d9488", "#6366f1", "#f59e0b", "#ec4899", "#22c55e"];
 const pharmaBackground = "/background-phar.jpg";
 const appLogo = "/dashboard-logo.png";
 
@@ -56,37 +44,38 @@ const navMeta: { id: Page; label: string; area: AccessArea; icon: React.ReactNod
 
 const emptyState: PharmacyState = { users: [], suppliers: [], medicines: [], medicineBatches: [], purchases: [], purchaseItems: [], sales: [], saleItems: [], inventoryTransactions: [], auditLogs: [] };
 
-const hydrateState = (source: PharmacyState): PharmacyState => ({
-  ...source,
-  sales: source.sales.map((sale) => ({
-    ...sale,
-    transactionTime: new Date(sale.transactionDate).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
-    items: source.saleItems.filter((item) => item.saleId === sale.id).map((item) => ({
-      medicineId: item.medicineId,
-      medicineName: item.medicineName,
-      quantity: item.quantity,
-      unitPrice: item.unitPrice,
-      subtotal: item.subtotal,
+const hydrateState = (source: PharmacyState): PharmacyState => {
+  const saleItemsBySale = new Map<string, PharmacyState["saleItems"]>();
+  for (const item of source.saleItems) {
+    const items = saleItemsBySale.get(item.saleId);
+    if (items) items.push(item);
+    else saleItemsBySale.set(item.saleId, [item]);
+  }
+
+  return {
+    ...source,
+    sales: source.sales.map((sale) => ({
+      ...sale,
+      transactionTime: transactionTimeFormatter.format(new Date(sale.transactionDate)),
+      items: (saleItemsBySale.get(sale.id) ?? []).map((item) => ({
+        medicineId: item.medicineId,
+        medicineName: item.medicineName,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        subtotal: item.subtotal,
+      })),
     })),
-  })),
-});
+  };
+};
 
 const errorMessage = (error: unknown) => error instanceof ApiError ? `${error.message} (${error.status}${error.code ? ` · ${error.code}` : ""})` : error instanceof Error ? error.message : "The request could not be completed.";
 const today = () => dateKey(new Date());
 const daysUntil = (date: string | Date) => (Date.parse(`${dateKey(date)}T00:00:00Z`) - Date.parse(`${today()}T00:00:00Z`)) / 86400000;
 const isExpiringSoon = (date: string | Date) => daysUntil(date) > 0 && daysUntil(date) <= 90;
-const chartCurrency = (value: number) => {
-  if (value === 0) return "₱0";
-  if (Math.abs(value) >= 1000) {
-    const thousands = value / 1000;
-    return `₱${Number(thousands.toFixed(thousands < 10 ? 1 : 0))}k`;
-  }
-  return fmt(value);
-};
-
+const transactionTimeFormatter = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
 function App() {
   const [state, setState] = useState<PharmacyState>(emptyState);
-  const [page, setPage] = useState<Page>("dashboard");
+  const [page, setPage] = useState<Page>(() => new URLSearchParams(window.location.search).has("payment_sale") ? "pos" : "dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [authUser, setAuthUser] = useState<PharmacyUser | null>(null);
   const [login, setLogin] = useState({ username: "", password: "" });
@@ -159,7 +148,7 @@ function App() {
   const lowStockCount = state.medicines.filter((item) => item.quantity <= item.reorderLevel).length;
   const todayRevenue = state.sales
     .filter((sale) => dateKey(sale.transactionDate) === today() && sale.status === "COMPLETED")
-    .reduce((sum, sale) => sum + sale.totalAmount, 0);
+    .reduce((sum, sale) => sum + netSaleAmount(sale), 0);
 
   if (booting) return <div className="flex min-h-screen items-center justify-center text-sm text-slate-600">Connecting to pharmacy service...</div>;
 
@@ -398,22 +387,28 @@ function SystemShell({
 
 function DashboardPage({ state, onNavigate, onLowStock, onExpiringSoon }: { state: PharmacyState; onNavigate: (page: Page) => void; onLowStock: () => void; onExpiringSoon: () => void }) {
   const todaySales = state.sales.filter((sale) => dateKey(sale.transactionDate) === today());
-  const totalRevenue = todaySales.reduce((sum, sale) => sum + sale.totalAmount, 0);
+  const totalRevenue = todaySales.reduce((sum, sale) => sum + netSaleAmount(sale), 0);
   const lowStock = state.medicines.filter((item) => item.quantity <= item.reorderLevel);
   const expiringSoon = state.medicines.filter((item) => isExpiringSoon(item.expirationDate));
   const weekStart = new Date();
   weekStart.setHours(0, 0, 0, 0);
   weekStart.setDate(weekStart.getDate() - 6);
-  const weeklySales = Array.from({ length: 7 }, (_, index) => {
+  const weekDays = Array.from({ length: 7 }, (_, index) => {
     const day = new Date(weekStart);
     day.setDate(weekStart.getDate() + index);
-    const key = dateKey(day);
-    return { day: day.toLocaleDateString("en", { weekday: "short" }), revenue: state.sales.filter((sale) => sale.status === "COMPLETED" && dateKey(sale.transactionDate) === key).reduce((sum, sale) => sum + sale.totalAmount, 0) };
+    return { key: dateKey(day), day: day.toLocaleDateString("en", { weekday: "short" }) };
   });
+  const revenueByDay = new Map(weekDays.map(({ key }) => [key, 0]));
+  for (const sale of state.sales) {
+    if (sale.status !== "COMPLETED") continue;
+    const key = dateKey(sale.transactionDate);
+    if (revenueByDay.has(key)) revenueByDay.set(key, revenueByDay.get(key)! + netSaleAmount(sale));
+  }
+  const weeklySales = weekDays.map(({ key, day }) => ({ day, revenue: revenueByDay.get(key)! }));
 
   const paymentBreakdown = Object.entries(
     todaySales.reduce<Record<string, number>>((acc, sale) => {
-      acc[sale.paymentMethod] = (acc[sale.paymentMethod] ?? 0) + sale.totalAmount;
+      acc[sale.paymentMethod] = (acc[sale.paymentMethod] ?? 0) + netSaleAmount(sale);
       return acc;
     }, {})
   );
@@ -427,39 +422,9 @@ function DashboardPage({ state, onNavigate, onLowStock, onExpiringSoon }: { stat
         <StatCard title="Expiring Soon" value={String(expiringSoon.length)} sub="Under 90 days" onClick={onExpiringSoon} icon={<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5"><path d="M12 6.5V12l3.2 2.2" /><circle cx="12" cy="12" r="7.5" /><path d="M4.5 7.5h3" /><path d="M16.5 7.5h3" /></svg>} accent="bg-rose-50 text-rose-600" />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-5 flex items-center justify-between">
-            <div>
-              <div className="text-sm font-bold text-slate-900">Weekly Revenue</div>
-              <div className="text-xs text-slate-500">Last 7 days</div>
-            </div>
-            <div className="text-xs text-slate-500">Live data</div>
-          </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={weeklySales}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-              <XAxis dataKey="day" tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} />
-              <YAxis domain={[0, "auto"]} tickCount={5} tick={{ fill: "#64748b", fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(value) => chartCurrency(Number(value ?? 0))} />
-              <Tooltip formatter={(value) => fmt(Number(value ?? 0))} />
-              <Bar dataKey="revenue" radius={[8, 8, 0, 0]} fill="#0d9488" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-5 text-sm font-bold text-slate-900">Payment Mix</div>
-          <ResponsiveContainer width="100%" height={220}>
-            <PieChart>
-              <Pie data={paymentBreakdown.map(([name, value]) => ({ name, value }))} dataKey="value" innerRadius={45} outerRadius={75} paddingAngle={3}>
-                {paymentBreakdown.map((entry, index) => <Cell key={entry[0]} fill={PIE_COLORS[index % PIE_COLORS.length]} />)}
-              </Pie>
-              <Tooltip formatter={(value) => fmt(Number(value ?? 0))} />
-              <Legend />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
+      <Suspense fallback={<div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]" aria-busy="true"><div className="min-h-[300px] rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" /><div className="min-h-[300px] rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" /></div>}>
+        <DashboardCharts weeklySales={weeklySales} paymentBreakdown={paymentBreakdown} />
+      </Suspense>
 
       <div>
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -512,6 +477,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState("");
   const [pendingPayment, setPendingPayment] = useState<{ saleId: string; paymentId: string } | null>(null);
+  const paymentReturnHandled = useRef(false);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scannerError, setScannerError] = useState("");
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -609,9 +575,13 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     return cleanup;
   }, [loadRemoteMedicines]);
 
-  const availableStock = (medicineId: string) => state.medicineBatches
-    .filter((batch) => batch.medicineId === medicineId && batch.quantity > 0 && batch.expirationDate >= today())
-    .reduce((total, batch) => total + batch.quantity, 0);
+  const availableStockByMedicine = new Map<string, number>();
+  const currentDay = today();
+  for (const batch of state.medicineBatches) {
+    if (batch.quantity <= 0 || batch.expirationDate < currentDay) continue;
+    availableStockByMedicine.set(batch.medicineId, (availableStockByMedicine.get(batch.medicineId) ?? 0) + batch.quantity);
+  }
+  const availableStock = (medicineId: string) => availableStockByMedicine.get(medicineId) ?? 0;
 
   const visibleCategories = getVisibleCategoryFilters(remoteMedicines, (medicine) => availableStock(medicine.id) > 0);
   const categoryFilters = visibleCategories.includes(category) ? category : "All";
@@ -681,6 +651,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     setAmountReceived("0");
     setPaymentMethod("Cash");
     setIdempotencyKey(crypto.randomUUID());
+    sessionStorage.removeItem("pharmasync_pending_checkout");
   };
 
   const resetTransaction = () => {
@@ -718,12 +689,60 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   const cancelPendingPayment = async () => {
     if (!pendingPayment) return;
     try {
-      await api.cancelPayment(pendingPayment.paymentId);
+      const result = await api.cancelPayment(pendingPayment.paymentId);
+      if (result.status === "PAID") {
+        await completeSale(pendingPayment.saleId);
+        return;
+      }
+      if (result.status !== "CANCELLED") {
+        setSaleError(`Payment is ${result.status.toLowerCase()}. Check its status before retrying.`);
+        return;
+      }
       setPendingPayment(null);
       setIdempotencyKey(crypto.randomUUID());
       setSaleError("Payment cancelled. The cart is unchanged and can be retried.");
     } catch (error) { setSaleError(errorMessage(error)); }
   };
+
+  useEffect(() => {
+    if (paymentReturnHandled.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const saleId = params.get("payment_sale");
+    const paymentId = params.get("payment_id");
+    const paymentReturn = params.get("payment_return");
+    if (!saleId || !paymentId || !paymentReturn) return;
+    paymentReturnHandled.current = true;
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.hash}`);
+    const savedCheckout = sessionStorage.getItem("pharmasync_pending_checkout");
+    if (savedCheckout) {
+      try {
+        const saved = JSON.parse(savedCheckout) as { cart?: CartItem[]; discount?: string; discountType?: "none" | "pwd" | "senior"; discountId?: string; amountReceived?: string; paymentMethod?: string };
+        if (Array.isArray(saved.cart)) setCart(saved.cart);
+        if (saved.discount !== undefined) setDiscount(saved.discount);
+        if (saved.discountType) setDiscountType(saved.discountType);
+        if (saved.discountId !== undefined) setDiscountId(saved.discountId);
+        if (saved.amountReceived !== undefined) setAmountReceived(saved.amountReceived);
+        if (saved.paymentMethod) setPaymentMethod(saved.paymentMethod);
+      } catch { sessionStorage.removeItem("pharmasync_pending_checkout"); }
+    }
+    setPendingPayment({ saleId, paymentId });
+    void (async () => {
+      try {
+        let paymentStatus = (await api.paymentStatus(paymentId)).status;
+        if (paymentStatus === "PAID") {
+          await completeSale(saleId);
+          return;
+        }
+        if (paymentReturn === "cancel" && ["PENDING", "AUTHORIZED"].includes(paymentStatus)) paymentStatus = (await api.cancelPayment(paymentId)).status;
+        if (["FAILED", "CANCELLED", "EXPIRED", "REFUNDED"].includes(paymentStatus)) {
+          setPendingPayment(null);
+          setIdempotencyKey(crypto.randomUUID());
+          setSaleError(`Payment ${paymentStatus.toLowerCase()}. The cart is ready to retry.`);
+          sessionStorage.removeItem("pharmasync_pending_checkout");
+        } else setSaleError("Payment is still pending. Check the provider status before retrying.");
+      } catch (error) { setSaleError(errorMessage(error)); }
+    })();
+  }, []);
 
   const submitSale = async () => {
     if (!cart.length || pendingPayment) return;
@@ -747,9 +766,14 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
         amountReceived: Number(amountReceived || total),
         idempotencyKey,
       });
-      if (result.status === "PENDING") {
+      if (result.status === "PENDING" || result.status === "AUTHORIZED") {
         if (!result.paymentId) throw new Error("Pending payment did not return a payment reference.");
         setPendingPayment({ saleId: result.id, paymentId: result.paymentId });
+        if (result.checkoutUrl) {
+          sessionStorage.setItem("pharmasync_pending_checkout", JSON.stringify({ cart, discount, discountType, discountId, amountReceived, paymentMethod }));
+          window.location.assign(result.checkoutUrl);
+          return;
+        }
         setSaleError("Payment is pending. Do not submit the order again; stock has not changed.");
         void onRefresh().catch(() => undefined);
         return;
@@ -884,7 +908,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
               <input value={amountReceived} onChange={(e) => setAmountReceived(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
             </div>
           )}
-          {paymentMethod !== "Cash" && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">Demo simulation only. No real payment is collected.</div>}
+          {paymentMethod !== "Cash" && <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">You'll continue to the configured payment provider to complete this transaction.</div>}
           {pendingPayment && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"><div className="font-semibold">Payment pending confirmation</div><div className="mt-1">Stock remains unchanged. Check the provider status or cancel this attempt.</div><div className="mt-2 flex gap-3"><button onClick={() => void checkPendingPayment()} className="font-semibold underline">Check status</button><button onClick={() => void cancelPendingPayment()} className="font-semibold underline">Cancel attempt</button></div></div>}
           {saleError && <div role="alert" className="rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{saleError}</div>}
 
@@ -896,7 +920,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
             {paymentMethod === 'Cash' && <div className="flex items-center justify-between text-sm"><span>Change</span><span>{fmt(change)}</span></div>}
           </div>
 
-          <button onClick={() => void submitSale()} disabled={submitting || cart.length === 0 || Boolean(pendingPayment)} className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white transition-all duration-150 ease-out hover:bg-teal-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50">{submitting ? <span className="inline-flex items-center justify-center gap-2"><span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />Processing...</span> : paymentMethod === "Cash" ? "Complete sale" : `Simulate ${paymentMethod} payment`}</button>
+          <button onClick={() => void submitSale()} disabled={submitting || cart.length === 0 || Boolean(pendingPayment)} className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white transition-all duration-150 ease-out hover:bg-teal-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50">{submitting ? <span className="inline-flex items-center justify-center gap-2"><span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />Processing...</span> : paymentMethod === "Cash" ? "Complete sale" : `Continue to ${paymentMethod}`}</button>
         </div>
       </div>
     </div>
@@ -1010,9 +1034,13 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
         referenceNumber: purchaseDraft.referenceNumber,
         items: [{ medicineId: purchaseDraft.medicineId, quantity: Number(purchaseDraft.quantity), unitCost: Number(purchaseDraft.unitCost), batchNumber: purchaseDraft.batchNumber, expirationDate: purchaseDraft.expirationDate }],
       });
-      await onRefresh();
       setPurchaseDraft((previous) => ({ ...previous, referenceNumber: `PO-${Date.now()}`, quantity: "1", batchNumber: "", expirationDate: "" }));
-    } catch (error) { setOperationError(errorMessage(error)); }
+    } catch (error) {
+      setOperationError(errorMessage(error));
+      return;
+    }
+    try { await onRefresh(); }
+    catch (error) { setOperationError(`Purchase order was created, but the list could not refresh: ${errorMessage(error)}. Do not create it again; retry the refresh when the database is available.`); }
   };
 
   const receivePurchase = async (purchaseId: string) => {
@@ -1021,8 +1049,10 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
 
   const performReceivePurchase = async (purchaseId: string) => {
     setOperationError("");
-    try { await api.receivePurchase(purchaseId); await onRefresh(); }
-    catch (error) { setOperationError(errorMessage(error)); }
+    try { await api.receivePurchase(purchaseId); }
+    catch (error) { setOperationError(errorMessage(error)); return; }
+    try { await onRefresh(); }
+    catch (error) { setOperationError(`Purchase was received, but inventory could not refresh: ${errorMessage(error)}. Do not receive it again; retry the refresh when the database is available.`); }
   };
 
   const cancelPurchase = async (purchaseId: string) => {
@@ -1031,8 +1061,10 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
 
   const performCancelPurchase = async (purchaseId: string) => {
     setOperationError("");
-    try { await api.cancelPurchase(purchaseId); await onRefresh(); }
-    catch (error) { setOperationError(errorMessage(error)); }
+    try { await api.cancelPurchase(purchaseId); }
+    catch (error) { setOperationError(errorMessage(error)); return; }
+    try { await onRefresh(); }
+    catch (error) { setOperationError(`Purchase was cancelled, but the list could not refresh: ${errorMessage(error)}. Do not cancel it again; retry the refresh when the database is available.`); }
   };
 
   const recordMovement = async () => {
@@ -1043,8 +1075,12 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
     setOperationError("");
     try {
       await api.recordInventoryMovement({ ...movementDraft, quantity: Number(movementDraft.quantity) });
-      await onRefresh();
-    } catch (error) { setOperationError(errorMessage(error)); }
+    } catch (error) {
+      setOperationError(errorMessage(error));
+      return;
+    }
+    try { await onRefresh(); }
+    catch (error) { setOperationError(`Stock movement was recorded, but inventory could not refresh: ${errorMessage(error)}. Do not record it again; retry the refresh when the database is available.`); }
   };
 
   const deleteItem = async (itemId: string) => {
@@ -1258,10 +1294,11 @@ function SuppliersPage({ state, onRefresh }: { state: PharmacyState; onRefresh: 
   const performSave = async () => {
     try {
       await api.saveSupplier(editingId ?? undefined, draft);
-      await onRefresh();
-      setDraft({});
-      setEditingId(null);
-    } catch (error) { window.alert(errorMessage(error)); }
+    } catch (error) { window.alert(errorMessage(error)); return; }
+    setDraft({});
+    setEditingId(null);
+    try { await onRefresh(); }
+    catch (error) { window.alert(`Supplier was saved, but the list could not refresh: ${errorMessage(error)}. Do not submit it again; retry the refresh when the database is available.`); }
   };
 
   const remove = async (id: string) => {
@@ -1343,10 +1380,11 @@ function UsersPage({ state, onRefresh, currentUser }: { state: PharmacyState; on
     try {
       if (editingUserId) await api.updateUser(editingUserId, { fullName: draft.fullName!, email: draft.email!, role: draft.role ?? "CASHIER" });
       else await api.createUser({ username: String(draft.username), fullName: String(draft.fullName), email: String(draft.email), password: String(draft.password), role: draft.role ?? "CASHIER" });
-      await onRefresh();
-      setDraft({ password: "" });
-      setEditingUserId(null);
-    } catch (error) { window.alert(errorMessage(error)); }
+    } catch (error) { window.alert(errorMessage(error)); return; }
+    setDraft({ password: "" });
+    setEditingUserId(null);
+    try { await onRefresh(); }
+    catch (error) { window.alert(`User was saved, but the roster could not refresh: ${errorMessage(error)}. Do not submit it again; retry the refresh when the database is available.`); }
   };
 
   const deactivate = async (user: PharmacyUser) => {
@@ -1673,23 +1711,9 @@ function ReportsPage({ state }: { state: PharmacyState }) {
         <ReportMetric label="Inventory Value" value={fmt(inventoryValue)} note={`${lowStock} low stock · ${report?.inventory.expiring_soon_count ?? 0} expiring soon`} color="text-slate-900" />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1.55fr_1fr]">
-        <ReportPanel title="Monthly Revenue" subtitle="Revenue by transaction month">
-          <ResponsiveContainer width="100%" height={240}><BarChart data={monthlyRevenue}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} /><XAxis dataKey="month" tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(value) => fmt(Number(value ?? 0))} /><Tooltip formatter={(value) => fmt(Number(value ?? 0))} /><Bar dataKey="revenue" radius={[5, 5, 0, 0]} fill="#0f8587" /></BarChart></ResponsiveContainer>
-        </ReportPanel>
-        <ReportPanel title="Sales by Category" subtitle="Dispensed units by medicine type">
-          <ResponsiveContainer width="100%" height={240}><PieChart><Pie data={byCategory} dataKey="value" nameKey="name" innerRadius={58} outerRadius={86} paddingAngle={3}>{byCategory.map((entry, index) => <Cell key={entry.name} fill={PIE_COLORS[index % PIE_COLORS.length]} />)}</Pie><Tooltip /><Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} /></PieChart></ResponsiveContainer>
-        </ReportPanel>
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-[1.1fr_1fr]">
-        <ReportPanel title="Stock Movement" subtitle="Received and dispensed units">
-          <ResponsiveContainer width="100%" height={220}><LineChart data={movement}><CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} /><XAxis dataKey="month" tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} /><Tooltip /><Legend iconSize={8} wrapperStyle={{ fontSize: 10 }} /><Line type="monotone" dataKey="received" name="Received" stroke="#0f8587" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="dispensed" name="Dispensed" stroke="#32b4a4" strokeWidth={2} strokeDasharray="4 3" dot={false} /></LineChart></ResponsiveContainer>
-        </ReportPanel>
-        <ReportPanel title="Top Selling Items" subtitle="Ranked by units dispensed">
-          <div className="space-y-3 pt-2">{topSelling.length === 0 ? <div className="py-12 text-center text-sm text-slate-400">No completed sales yet.</div> : topSelling.map((item, index) => <div key={item.name}><div className="mb-1 flex items-center gap-2 text-xs"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-teal-50 font-bold text-teal-700">{index + 1}</span><span className="min-w-0 flex-1 truncate font-semibold text-slate-700">{item.name}</span><span className="font-bold text-slate-800">{item.quantity}</span></div><div className="ml-7 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-teal-600" style={{ width: `${Math.max(8, (item.quantity / topSelling[0].quantity) * 100)}%` }} /></div><div className="ml-7 mt-1 text-[10px] text-slate-400">{fmt(item.revenue)} revenue</div></div>)}</div>
-        </ReportPanel>
-      </div>
+      <Suspense fallback={<div className="space-y-5" aria-busy="true"><div className="grid gap-5 xl:grid-cols-[1.55fr_1fr]"><div className="min-h-[300px] rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" /><div className="min-h-[300px] rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" /></div><div className="grid gap-5 xl:grid-cols-[1.1fr_1fr]"><div className="min-h-[280px] rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" /><div className="min-h-[280px] rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" /></div></div>}>
+        <ReportCharts monthlyRevenue={monthlyRevenue} byCategory={byCategory} movement={movement} topSelling={topSelling} />
+      </Suspense>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="mb-3"><div className="text-sm font-bold text-slate-900">Generate Reports</div><div className="text-xs text-slate-500">Download structured reports for inventory and business monitoring</div></div><div className="grid gap-3 md:grid-cols-2"><ReportDownload title="Monthly Inventory Report" format="CSV" description="Stock levels, reorder points, and expiration dates" onClick={exportInventory} /><ReportDownload title="Sales Transaction Log" format="CSV" description="Completed transactions and payment details" onClick={exportSales} /><ReportDownload title="Revenue Summary" format="CSV" description="Revenue totals by payment method" onClick={() => download("revenue-summary.csv", [["Payment method", "Revenue"], ...revenueByPayment.map((entry) => [entry.name, String(entry.value)])])} /><ReportDownload title="Low Stock Alert Report" format="CSV" description="Items below their configured reorder level" onClick={() => download("low-stock-report.csv", [["Medicine", "Current stock", "Reorder level"], ...state.medicines.filter((medicine) => medicine.quantity <= medicine.reorderLevel).map((medicine) => [medicine.brandName, String(medicine.quantity), String(medicine.reorderLevel)])])} /></div></div>
     </div>
@@ -1698,10 +1722,6 @@ function ReportsPage({ state }: { state: PharmacyState }) {
 
 function ReportMetric({ label, value, note, color }: { label: string; value: string; note: string; color: string }) {
   return <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div><div className={`mt-2 text-2xl font-bold ${color}`}>{value}</div><div className="mt-1 text-[11px] text-slate-500">{note}</div></div>;
-}
-
-function ReportPanel({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
-  return <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"><div className="mb-2"><div className="text-sm font-bold text-slate-900">{title}</div><div className="text-[11px] text-slate-500">{subtitle}</div></div>{children}</div>;
 }
 
 function ReportDownload({ title, format, description, onClick }: { title: string; format: string; description: string; onClick: () => void }) {

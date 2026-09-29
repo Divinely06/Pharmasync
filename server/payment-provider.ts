@@ -1,13 +1,53 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 
-export type PaymentMethod = "CARD" | "E_WALLET";
+export type PaymentMethod = "CARD" | "GCASH" | "MAYA";
 export type PaymentStatus = "PENDING" | "AUTHORIZED" | "PAID" | "FAILED" | "CANCELLED" | "EXPIRED" | "REFUNDED";
-export type PaymentRequest = { saleId: string; amount: number; currency: string; method: PaymentMethod; idempotencyKey: string };
-export type PaymentResult = { status: PaymentStatus; provider: string; providerReference: string | null; failureCode?: string };
+export type PaymentRequest = { saleId: string; amount: number; currency: string; method: PaymentMethod; idempotencyKey: string; successUrl?: string; cancelUrl?: string };
+export type PaymentResult = { status: PaymentStatus; provider: string; providerReference: string | null; checkoutUrl?: string; paymentReference?: string; referenceNumber?: string; amountMinor?: number; currency?: string; failureCode?: string };
+
+export const isPaymentInProgress = (status: PaymentStatus) => status === "PENDING" || status === "AUTHORIZED";
+
+export type PayMongoWebhook = { eventId: string | null; eventType: string; liveMode: boolean; providerReference: string };
+
+export const verifyPayMongoWebhookSignature = (rawBody: Buffer, signatureHeader: string | undefined, secret: string, liveMode: boolean) => {
+  if (!signatureHeader || !secret) return false;
+  const parts = new Map(signatureHeader.split(",").map((part) => {
+    const separator = part.indexOf("=");
+    return separator < 0 ? [part.trim(), ""] : [part.slice(0, separator).trim(), part.slice(separator + 1).trim()];
+  }));
+  const timestamp = parts.get("t");
+  const signature = parts.get(liveMode ? "li" : "te");
+  if (!timestamp || !/^\d+$/.test(timestamp) || !signature || !/^[a-f0-9]{64}$/i.test(signature)) return false;
+  const provided = Buffer.from(signature, "hex");
+  const expected = createHmac("sha256", secret).update(Buffer.concat([Buffer.from(`${timestamp}.`), rawBody])).digest();
+  return provided.length === expected.length && timingSafeEqual(provided, expected);
+};
+
+export const parsePayMongoWebhook = (payload: unknown): PayMongoWebhook | null => {
+  if (!payload || typeof payload !== "object") return null;
+  const event = (payload as { data?: unknown }).data;
+  if (!event || typeof event !== "object") return null;
+  const eventData = event as { id?: unknown; attributes?: unknown };
+  if (!eventData.attributes || typeof eventData.attributes !== "object") return null;
+  const attributes = eventData.attributes as { type?: unknown; livemode?: unknown; data?: unknown };
+  if (typeof attributes.type !== "string" || typeof attributes.livemode !== "boolean" || !attributes.data || typeof attributes.data !== "object") return null;
+  const resource = attributes.data as { id?: unknown; type?: unknown; attributes?: unknown };
+  const resourceAttributes = resource.attributes && typeof resource.attributes === "object" ? resource.attributes as { checkout_session_id?: unknown; checkout_session?: unknown } : {};
+  const nestedSession = resourceAttributes.checkout_session && typeof resourceAttributes.checkout_session === "object" ? (resourceAttributes.checkout_session as { id?: unknown }).id : undefined;
+  const reference = resource.type === "checkout_session" ? resource.id : resourceAttributes.checkout_session_id ?? nestedSession;
+  if (typeof reference !== "string" || !reference) return null;
+  return {
+    eventId: typeof eventData.id === "string" ? eventData.id : null,
+    eventType: attributes.type,
+    liveMode: attributes.livemode,
+    providerReference: reference,
+  };
+};
 
 export interface PaymentProvider {
   createPayment(request: PaymentRequest): Promise<PaymentResult>;
   getPayment(providerReference: string): Promise<PaymentResult | null>;
+  getRefundStatus?(refundReference: string): Promise<PaymentResult | null>;
   cancelPayment(providerReference: string): Promise<PaymentResult | null>;
   refundPayment(providerReference: string, amount?: number): Promise<PaymentResult | null>;
 }
@@ -62,6 +102,10 @@ export class DummyPaymentProvider implements PaymentProvider {
     if (payment.status !== "PAID" || (amount !== undefined && (!Number.isFinite(amount) || amount <= 0))) return null;
     payment.status = "REFUNDED";
     return payment;
+  }
+
+  async getRefundStatus(refundReference: string) {
+    return this.byReference.get(refundReference) ?? null;
   }
 }
 
@@ -192,15 +236,27 @@ export class SandboxPaymentProvider implements PaymentProvider {
       return null;
     }
   }
+
+  async getRefundStatus(refundReference: string): Promise<PaymentResult | null> {
+    try {
+      const payload = await this.fetchJson<{ status?: string; id?: string; reference?: string; provider_reference?: string; failure_code?: string; }>(`/refunds/${encodeURIComponent(refundReference)}`, { method: "GET" });
+      return {
+        status: normalizeSandboxStatus(payload.status ?? "PENDING"),
+        provider: "SANDBOX",
+        providerReference: String(payload.reference ?? payload.provider_reference ?? payload.id ?? refundReference),
+        ...(payload.failure_code ? { failureCode: String(payload.failure_code) } : {}),
+      };
+    } catch { return null; }
+  }
 }
 
 export class PayMongoProvider extends SandboxPaymentProvider {
   constructor(baseUrl = process.env.PAYMONGO_BASE_URL ?? "https://api.paymongo.com/v1", apiKey = process.env.PAYMONGO_SECRET_KEY ?? process.env.PAYMONGO_API_KEY ?? "") {
-    super(baseUrl, apiKey);
+    super(baseUrl.replace(/\/$/, ""), apiKey);
   }
 
-  protected async request<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
+  protected async request<T>(path: string, init?: RequestInit, baseUrl = this.baseUrl): Promise<T> {
+    const response = await fetch(`${baseUrl}${path}`, {
       ...init,
       headers: {
         "Content-Type": "application/json",
@@ -219,39 +275,58 @@ export class PayMongoProvider extends SandboxPaymentProvider {
   }
 
   async createPayment(request: PaymentRequest): Promise<PaymentResult> {
-    const payload = await this.request<{ data?: { id?: string; attributes?: { status?: string; id?: string; payment_intent_id?: string; failure_code?: string } } }>('/payment_intents', {
+    const paymentMethodTypes = request.method === "CARD" ? ["card"] : request.method === "GCASH" ? ["gcash"] : ["paymaya"];
+    if (!request.successUrl || !request.cancelUrl) throw new Error("PayMongo checkout return URLs are required");
+    const payload = await this.request<{ data?: { id?: string; attributes?: { checkout_url?: string } } }>("/checkout_sessions", {
       method: "POST",
+      headers: { "Idempotency-Key": request.idempotencyKey },
       body: JSON.stringify({
         data: {
           attributes: {
-            amount: Math.round(request.amount * 100),
-            currency: request.currency.toLowerCase(),
-            payment_method_allowed: request.method === "CARD" ? ["card"] : ["gcash"],
-            payment_method_options: request.method === "CARD" ? { card: { request_three_d_secure: "any" } } : undefined,
-            description: `Pharmasync sale ${request.saleId}`,
+            line_items: [{ name: `Pharmasync sale ${request.saleId}`, amount: Math.round(request.amount * 100), currency: request.currency, quantity: 1 }],
+            payment_method_types: paymentMethodTypes,
+            success_url: request.successUrl,
+            cancel_url: request.cancelUrl,
+            reference_number: request.saleId,
           },
         },
       }),
-    });
+    }, this.baseUrl.replace(/\/v1$/, "/v2"));
 
-    const attrs = payload.data?.attributes ?? {};
+    const session = payload.data;
+    const checkoutUrl = session?.attributes?.checkout_url;
+    if (!session?.id || !checkoutUrl) throw new Error("PayMongo did not return a valid checkout session");
     return {
-      status: attrs.status === "succeeded" ? "PAID" : attrs.status === "awaiting_payment_method" ? "PENDING" : attrs.status === "failed" ? "FAILED" : "PENDING",
+      status: "PENDING",
       provider: "PAYMONGO",
-      providerReference: String(payload.data?.id ?? attrs.payment_intent_id ?? `pm-${randomUUID()}`),
-      ...(attrs.failure_code ? { failureCode: String(attrs.failure_code) } : {}),
+      providerReference: session.id,
+      checkoutUrl,
     };
   }
 
   async getPayment(providerReference: string): Promise<PaymentResult | null> {
     try {
-      const payload = await this.request<{ data?: { id?: string; attributes?: { status?: string; failure_code?: string } } }>(`/payment_intents/${encodeURIComponent(providerReference)}`);
+      const payload = await this.request<{ data?: { id?: string; attributes?: { status?: string; checkout_url?: string; reference_number?: string; payments?: { id?: string; attributes?: { status?: string; amount?: number; currency?: string } }[] } } }>(`/checkout_sessions/${encodeURIComponent(providerReference)}`);
       const attrs = payload.data?.attributes ?? {};
+      const paidPayment = attrs.payments?.find((payment) => payment.attributes?.status?.toLowerCase() === "paid");
+      const paymentStatuses = attrs.payments?.map((payment) => payment.attributes?.status?.toLowerCase()) ?? [];
+      const sessionStatus = attrs.status?.toLowerCase();
+      const status: PaymentStatus = paymentStatuses.includes("paid") || sessionStatus === "paid" ? "PAID"
+        : paymentStatuses.some((paymentStatus) => paymentStatus === "failed" || paymentStatus === "declined") ? "FAILED"
+        : paymentStatuses.some((paymentStatus) => paymentStatus === "cancelled" || paymentStatus === "canceled") ? "CANCELLED"
+        : sessionStatus === "expired" ? "EXPIRED"
+        : sessionStatus === "cancelled" || sessionStatus === "canceled" ? "CANCELLED"
+        : sessionStatus === "failed" ? "FAILED"
+        : "PENDING";
       return {
-        status: attrs.status === "succeeded" ? "PAID" : attrs.status === "failed" ? "FAILED" : "PENDING",
+        status,
         provider: "PAYMONGO",
         providerReference: String(payload.data?.id ?? providerReference),
-        ...(attrs.failure_code ? { failureCode: String(attrs.failure_code) } : {}),
+        ...(attrs.checkout_url ? { checkoutUrl: attrs.checkout_url } : {}),
+        ...(attrs.reference_number ? { referenceNumber: attrs.reference_number } : {}),
+        ...(paidPayment?.id ? { paymentReference: paidPayment.id } : {}),
+        ...(paidPayment?.attributes?.amount !== undefined ? { amountMinor: paidPayment.attributes.amount } : {}),
+        ...(paidPayment?.attributes?.currency ? { currency: paidPayment.attributes.currency.toUpperCase() } : {}),
       };
     } catch {
       return null;
@@ -260,13 +335,12 @@ export class PayMongoProvider extends SandboxPaymentProvider {
 
   async cancelPayment(providerReference: string): Promise<PaymentResult | null> {
     try {
-      const payload = await this.request<{ data?: { id?: string; attributes?: { status?: string; failure_code?: string } } }>(`/payment_intents/${encodeURIComponent(providerReference)}/cancel`, { method: "POST" });
-      const attrs = payload.data?.attributes ?? {};
+      const payload = await this.request<{ data?: { id?: string; attributes?: { status?: string } } }>(`/checkout_sessions/${encodeURIComponent(providerReference)}/expire`, { method: "POST" });
+      const status = payload.data?.attributes?.status?.toLowerCase();
       return {
-        status: attrs.status === "cancelled" ? "CANCELLED" : "PENDING",
+        status: status === "paid" ? "PAID" : status === "expired" || status === "cancelled" || status === "canceled" ? "CANCELLED" : "PENDING",
         provider: "PAYMONGO",
         providerReference: String(payload.data?.id ?? providerReference),
-        ...(attrs.failure_code ? { failureCode: String(attrs.failure_code) } : {}),
       };
     } catch {
       return null;
@@ -275,28 +349,43 @@ export class PayMongoProvider extends SandboxPaymentProvider {
 
   async refundPayment(providerReference: string, amount?: number): Promise<PaymentResult | null> {
     try {
-      const payload = await this.request<{ data?: { id?: string; attributes?: { status?: string; failure_code?: string } } }>('/refunds', {
+      const payment = await this.getPayment(providerReference);
+      if (!payment || payment.status !== "PAID" || !payment.paymentReference) return null;
+      const refundAmount = amount === undefined ? payment.amountMinor : Math.round(amount * 100);
+      if (refundAmount === undefined || refundAmount <= 0) return null;
+      const payload = await this.request<{ data?: { id?: string; attributes?: { status?: string } } }>("/refunds", {
         method: "POST",
+        headers: { "Idempotency-Key": `refund-${payment.paymentReference}` },
         body: JSON.stringify({
           data: {
             attributes: {
-              amount: amount === undefined ? undefined : Math.round(amount * 100),
-              payment_intent_id: providerReference,
-              reason: "requested_by_customer",
+              amount: refundAmount,
+              payment_id: payment.paymentReference,
+              reason: "others",
             },
           },
         }),
-      });
-      const attrs = payload.data?.attributes ?? {};
+      }, this.baseUrl.replace(/\/v2$/, "/v1"));
       return {
-        status: attrs.status === "refunded" ? "REFUNDED" : "PENDING",
+        status: payload.data?.attributes?.status === "succeeded" ? "REFUNDED" : payload.data?.attributes?.status === "failed" ? "FAILED" : "PENDING",
         provider: "PAYMONGO",
-        providerReference: String(payload.data?.id ?? providerReference),
-        ...(attrs.failure_code ? { failureCode: String(attrs.failure_code) } : {}),
+        providerReference: String(payload.data?.id ?? payment.paymentReference),
       };
     } catch {
       return null;
     }
+  }
+
+  async getRefundStatus(refundReference: string): Promise<PaymentResult | null> {
+    try {
+      const payload = await this.request<{ data?: { id?: string; attributes?: { status?: string } } }>(`/refunds/${encodeURIComponent(refundReference)}`);
+      const status = payload.data?.attributes?.status?.toLowerCase();
+      return {
+        status: status === "succeeded" ? "REFUNDED" : status === "failed" ? "FAILED" : "PENDING",
+        provider: "PAYMONGO",
+        providerReference: String(payload.data?.id ?? refundReference),
+      };
+    } catch { return null; }
   }
 }
 
@@ -316,7 +405,8 @@ export const createPaymentProvider = (name = process.env.PAYMENT_PROVIDER ?? "du
   if (name === "paymongo") {
     const baseUrl = process.env.PAYMONGO_BASE_URL ?? "https://api.paymongo.com/v1";
     const apiKey = process.env.PAYMONGO_SECRET_KEY ?? process.env.PAYMONGO_API_KEY ?? "";
-    return isConfiguredLiveProvider(baseUrl, apiKey) ? new PayMongoProvider(baseUrl, apiKey) : new DummyPaymentProvider();
+    if (!isConfiguredLiveProvider(baseUrl, apiKey)) throw new Error("PAYMONGO_SECRET_KEY is required when PAYMENT_PROVIDER=paymongo");
+    return new PayMongoProvider(baseUrl, apiKey);
   }
   throw new Error(`Payment provider "${name}" is not configured`);
 };

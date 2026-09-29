@@ -6,7 +6,8 @@ import { logicalTables } from "./backup.js";
 import { normalizeDatabaseUrl } from "./db.js";
 
 type LogicalBackup = { format: string; schemaVersion: number; tables: Record<string, unknown[]> };
-const filePath = process.argv[2];
+const args = process.argv.slice(2);
+const filePath = args[0] === "--" ? args[1] : args[0];
 const targetConnectionString = normalizeDatabaseUrl(process.env.RESTORE_DATABASE_URL ?? "");
 if (!filePath || !targetConnectionString) throw new Error("Usage: RESTORE_DATABASE_URL=<disposable test database> pnpm db:restore -- <backup.json.gz>");
 
@@ -35,10 +36,11 @@ try {
     }
   }
   await client.query("COMMIT");
-  const counts = await Promise.all(logicalTables.map(async (table) => {
+  const counts = [];
+  for (const table of logicalTables) {
     const result = await client.query(`SELECT count(*)::int AS count FROM public.${table}`);
-    return { table, count: result.rows[0].count };
-  }));
+    counts.push({ table, count: result.rows[0].count });
+  }
   console.log(JSON.stringify({ restoredAt: new Date().toISOString(), schemaVersion: backup.schemaVersion, counts }));
 } catch (error) {
   await client.query("ROLLBACK");
