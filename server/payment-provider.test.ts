@@ -44,20 +44,26 @@ describe("dummy payment provider", () => {
     expect(() => createPaymentProvider("paymongo")).not.toThrow();
   });
 
-  it("falls back to the dummy provider when the live PayMongo credentials are missing", () => {
+  it("fails closed when the PayMongo secret is missing", () => {
     const originalKey = process.env.PAYMONGO_SECRET_KEY;
+    const originalApiKey = process.env.PAYMONGO_API_KEY;
     delete process.env.PAYMONGO_SECRET_KEY;
     delete process.env.PAYMONGO_API_KEY;
 
     try {
-      expect(createPaymentProvider("paymongo")).toBeInstanceOf(DummyPaymentProvider);
+      expect(() => createPaymentProvider("paymongo")).toThrow("PAYMONGO_SECRET_KEY is required when PAYMENT_PROVIDER=paymongo");
     } finally {
-      if (originalKey) process.env.PAYMONGO_SECRET_KEY = originalKey;
+      if (originalKey === undefined) delete process.env.PAYMONGO_SECRET_KEY;
+      else process.env.PAYMONGO_SECRET_KEY = originalKey;
+      if (originalApiKey === undefined) delete process.env.PAYMONGO_API_KEY;
+      else process.env.PAYMONGO_API_KEY = originalApiKey;
     }
   });
 
   it("creates a PayMongo payment intent when the provider is selected", async () => {
     const originalFetch = globalThis.fetch;
+    const originalSecretKey = process.env.PAYMONGO_SECRET_KEY;
+    const originalBaseUrl = process.env.PAYMONGO_BASE_URL;
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -78,8 +84,10 @@ describe("dummy payment provider", () => {
       }));
     } finally {
       globalThis.fetch = originalFetch;
-      delete process.env.PAYMONGO_SECRET_KEY;
-      delete process.env.PAYMONGO_BASE_URL;
+      if (originalSecretKey === undefined) delete process.env.PAYMONGO_SECRET_KEY;
+      else process.env.PAYMONGO_SECRET_KEY = originalSecretKey;
+      if (originalBaseUrl === undefined) delete process.env.PAYMONGO_BASE_URL;
+      else process.env.PAYMONGO_BASE_URL = originalBaseUrl;
     }
   });
 });

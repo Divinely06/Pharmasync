@@ -319,7 +319,8 @@ export const createPaymentProvider = (name = process.env.PAYMENT_PROVIDER ?? "du
   if (name === "paymongo") {
     const baseUrl = process.env.PAYMONGO_BASE_URL ?? "https://api.paymongo.com/v1";
     const apiKey = process.env.PAYMONGO_SECRET_KEY ?? process.env.PAYMONGO_API_KEY ?? "";
-    return isConfiguredLiveProvider(baseUrl, apiKey) ? new PayMongoProvider(baseUrl, apiKey) : new DummyPaymentProvider();
+    if (!isConfiguredLiveProvider(baseUrl, apiKey)) throw new Error("PAYMONGO_SECRET_KEY is required when PAYMENT_PROVIDER=paymongo");
+    return new PayMongoProvider(baseUrl, apiKey);
   }
   throw new Error(`Payment provider "${name}" is not configured`);
 };
