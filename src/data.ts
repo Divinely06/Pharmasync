@@ -102,6 +102,7 @@ export type SaleRecord = {
   discount: number
   tax: number
   totalAmount: number
+  refundAmount?: number
   paymentMethod: string
   amountReceived: number
   changeAmount: number
@@ -114,6 +115,9 @@ export type SaleRecord = {
     subtotal: number
   }[]
 }
+
+export const netSaleAmount = (sale: Pick<SaleRecord, "totalAmount" | "refundAmount">) =>
+  Math.max(0, sale.totalAmount - (sale.refundAmount ?? 0));
 
 export type InventoryTransaction = {
   id: string

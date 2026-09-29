@@ -15,6 +15,7 @@ import {
   generateMedicineBarcode,
   getVisibleCategoryFilters,
   matchesMedicineCategory,
+  netSaleAmount,
   normalizeBarcode,
   stopMediaStream,
 } from "./data";
@@ -147,7 +148,7 @@ function App() {
   const lowStockCount = state.medicines.filter((item) => item.quantity <= item.reorderLevel).length;
   const todayRevenue = state.sales
     .filter((sale) => dateKey(sale.transactionDate) === today() && sale.status === "COMPLETED")
-    .reduce((sum, sale) => sum + sale.totalAmount, 0);
+    .reduce((sum, sale) => sum + netSaleAmount(sale), 0);
 
   if (booting) return <div className="flex min-h-screen items-center justify-center text-sm text-slate-600">Connecting to pharmacy service...</div>;
 
@@ -386,7 +387,7 @@ function SystemShell({
 
 function DashboardPage({ state, onNavigate, onLowStock, onExpiringSoon }: { state: PharmacyState; onNavigate: (page: Page) => void; onLowStock: () => void; onExpiringSoon: () => void }) {
   const todaySales = state.sales.filter((sale) => dateKey(sale.transactionDate) === today());
-  const totalRevenue = todaySales.reduce((sum, sale) => sum + sale.totalAmount, 0);
+  const totalRevenue = todaySales.reduce((sum, sale) => sum + netSaleAmount(sale), 0);
   const lowStock = state.medicines.filter((item) => item.quantity <= item.reorderLevel);
   const expiringSoon = state.medicines.filter((item) => isExpiringSoon(item.expirationDate));
   const weekStart = new Date();
@@ -401,13 +402,13 @@ function DashboardPage({ state, onNavigate, onLowStock, onExpiringSoon }: { stat
   for (const sale of state.sales) {
     if (sale.status !== "COMPLETED") continue;
     const key = dateKey(sale.transactionDate);
-    if (revenueByDay.has(key)) revenueByDay.set(key, revenueByDay.get(key)! + sale.totalAmount);
+    if (revenueByDay.has(key)) revenueByDay.set(key, revenueByDay.get(key)! + netSaleAmount(sale));
   }
   const weeklySales = weekDays.map(({ key, day }) => ({ day, revenue: revenueByDay.get(key)! }));
 
   const paymentBreakdown = Object.entries(
     todaySales.reduce<Record<string, number>>((acc, sale) => {
-      acc[sale.paymentMethod] = (acc[sale.paymentMethod] ?? 0) + sale.totalAmount;
+      acc[sale.paymentMethod] = (acc[sale.paymentMethod] ?? 0) + netSaleAmount(sale);
       return acc;
     }, {})
   );
