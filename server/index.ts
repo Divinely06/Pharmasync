@@ -126,7 +126,7 @@ const fulfillSale = async (client: PoolClient, saleId: string, userId: string) =
     for (const allocation of allocations) {
       const batch = await client.query("UPDATE medicine_batches SET quantity=quantity-$1,updated_at=now() WHERE id=$2 AND quantity >= $1 RETURNING quantity", [allocation.quantity,allocation.batchId]);
       if (!batch.rowCount) throw Object.assign(new Error("Batch stock changed during checkout"), { status: 409, code: "INSUFFICIENT_STOCK" });
-      await client.query("INSERT INTO sale_item_batches (sale_item_id,batch_id,quantity) VALUES ($1,$2,$3)", [item.id,allocation.batchId,allocation.quantity]);
+      await client.query("INSERT INTO sale_item_batches (sale_item_id,batch_id,quantity) VALUES ($1,$2,$3)", [item.sale_item_id,allocation.batchId,allocation.quantity]);
     }
     const stock = await client.query("UPDATE medicines SET quantity=quantity-$1,updated_at=now() WHERE id=$2 RETURNING quantity", [item.quantity,item.medicine_id]);
     if (!stock.rowCount) throw Object.assign(new Error("Medicine stock changed during checkout"), { status: 409, code: "INSUFFICIENT_STOCK" });
