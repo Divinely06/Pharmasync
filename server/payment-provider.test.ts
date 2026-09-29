@@ -104,6 +104,9 @@ describe("PayMongo integration", () => {
         headers: expect.objectContaining({ "Idempotency-Key": request.idempotencyKey }),
         body: expect.stringContaining(JSON.stringify(paymentMethodTypes)),
       }));
+      const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+      expect(body.data.attributes.line_items[0]).toMatchObject({ name: "Pharmasync sale sale-1", amount: 10000, quantity: 1 });
+      expect(body.data.attributes.line_items[0]).not.toHaveProperty("currency");
     });
   });
 

@@ -266,7 +266,7 @@ export class PayMongoProvider extends SandboxPaymentProvider {
       body: JSON.stringify({
         data: {
           attributes: {
-            line_items: [{ name: `Pharmasync sale ${request.saleId}`, amount: Math.round(request.amount * 100), currency: request.currency.toLowerCase(), quantity: 1 }],
+            line_items: [{ name: `Pharmasync sale ${request.saleId}`, amount: Math.round(request.amount * 100), quantity: 1 }],
             payment_method_types: paymentMethodTypes,
             success_url: request.successUrl,
             cancel_url: request.cancelUrl,
