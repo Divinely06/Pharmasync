@@ -460,6 +460,7 @@ function DashboardPage({ state, onNavigate, onLowStock, onExpiringSoon }: { stat
 function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => Promise<PharmacyState> }) {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [paymentMethod, setPaymentMethod] = useState("Cash");
   const [discount, setDiscount] = useState("0");
@@ -797,16 +798,24 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
           <div className="mb-3 flex items-center gap-3">
             <input aria-label="Search medicines or scan barcode" value={search} onChange={(e) => { setSearch(e.target.value); setSearchPage(1); }} placeholder="Search medicines or scan barcode" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm focus:border-teal-500" />
             <button onClick={() => { setScannerError(""); setScannerOpen(true); }} className="shrink-0 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700">Scan barcode</button>
+            <div className="relative shrink-0" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFilterPanelOpen(false); }}>
+              <button type="button" aria-label="Filters" aria-expanded={filterPanelOpen} aria-controls="pos-filter-panel" title="Filter medicines" onClick={() => setFilterPanelOpen((open) => !open)} className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold ${filterPanelOpen || selectedCategory !== "All" ? "border-teal-600 bg-teal-50 text-teal-800" : "border-slate-300 text-slate-700"}`}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" className="h-4 w-4" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /><circle cx="8" cy="6" r="2" fill="currentColor" /><circle cx="15" cy="12" r="2" fill="currentColor" /><circle cx="10" cy="18" r="2" fill="currentColor" /></svg>
+                Filters{selectedCategory !== "All" && <span className="rounded-full bg-teal-700 px-1.5 text-[10px] text-white">1</span>}
+              </button>
+              {filterPanelOpen && <div id="pos-filter-panel" role="dialog" aria-label="Medicine filters" className="absolute right-0 z-30 mt-2 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white p-4 shadow-lg">
+                <div className="text-sm font-bold text-slate-900">Filter medicines</div>
+                <label htmlFor="pos-category-filter" className="mb-1 mt-3 block text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Category</label>
+                <select id="pos-category-filter" value={selectedCategory} onChange={(event) => { setCategory(event.target.value); setSearchPage(1); }} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                  <option value="All">All categories</option>
+                  {visibleCategories.filter((filter) => filter !== "All").map((filter) => <option key={filter} value={filter}>{filter}</option>)}
+                </select>
+                <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500"><span>{filteredMedicines.length} matching medicines</span><div className="flex gap-3"><button type="button" onClick={() => { setCategory("All"); setSearchPage(1); }} className="font-semibold text-slate-600 underline">Clear</button><button type="button" onClick={() => setFilterPanelOpen(false)} className="font-semibold text-teal-700 underline">Done</button></div></div>
+              </div>}
+            </div>
           </div>
           {scannerOpen && <div className="mb-3 rounded-xl bg-slate-900 p-3"><video ref={videoRef} autoPlay playsInline muted className="max-h-64 w-full rounded-lg object-cover" /><button onClick={() => setScannerOpen(false)} className="mt-2 text-xs font-semibold text-white">Close scanner</button></div>}
           {scannerError && <div role="status" className="mb-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">{scannerError}</div>}
-          <div className="flex flex-wrap gap-2">
-            {visibleCategories.map((filter) => (
-              <button key={filter} onClick={() => { setCategory(filter); setSearchPage(1); }} className={`rounded-full px-3 py-1.5 text-xs font-medium ${selectedCategory === filter ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                {filter}
-              </button>
-            ))}
-          </div>
         </div>
 
         <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
