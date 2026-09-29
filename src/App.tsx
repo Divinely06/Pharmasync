@@ -470,6 +470,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const [receiptFormat, setReceiptFormat] = useState<"thermal" | "standard">("thermal");
   const [submitting, setSubmitting] = useState(false);
+  const [paymentAction, setPaymentAction] = useState<"checking" | "cancelling" | null>(null);
   const [saleError, setSaleError] = useState("");
   const [cartError, setCartError] = useState("");
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
@@ -650,7 +651,9 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   };
 
   const checkPendingPayment = async () => {
-    if (!pendingPayment) return;
+    if (!pendingPayment || paymentAction) return;
+    setPaymentAction("checking");
+    setSaleError("");
     try {
       const result = await api.paymentStatus(pendingPayment.paymentId);
       if (result.status === "PAID") await completeSale(pendingPayment.saleId);
@@ -660,10 +663,13 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
         setSaleError(`Payment ${result.status.toLowerCase()}. The cart is unchanged and can be retried.`);
       } else setSaleError("Payment is still pending. Stock has not been changed.");
     } catch (error) { setSaleError(errorMessage(error)); }
+    finally { setPaymentAction(null); }
   };
 
   const cancelPendingPayment = async () => {
-    if (!pendingPayment) return;
+    if (!pendingPayment || paymentAction) return;
+    setPaymentAction("cancelling");
+    setSaleError("");
     try {
       const result = await api.cancelPayment(pendingPayment.paymentId);
       if (result.status === "PAID") {
@@ -678,6 +684,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
       setIdempotencyKey(crypto.randomUUID());
       setSaleError("Payment cancelled. The cart is unchanged and can be retried.");
     } catch (error) { setSaleError(errorMessage(error)); }
+    finally { setPaymentAction(null); }
   };
 
   useEffect(() => {
@@ -892,8 +899,8 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
             </div>
           )}
           {paymentMethod !== "Cash" && <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">You'll continue to the configured payment provider to complete this transaction.</div>}
-          {pendingPayment && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"><div className="font-semibold">Payment pending confirmation</div><div className="mt-1">Stock remains unchanged. Check the provider status or cancel this attempt.</div><div className="mt-2 flex gap-3"><button onClick={() => void checkPendingPayment()} className="font-semibold underline">Check status</button><button onClick={() => void cancelPendingPayment()} className="font-semibold underline">Cancel attempt</button></div></div>}
-          {saleError && <div role="alert" className="rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{saleError}</div>}
+          {pendingPayment && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900" aria-live="polite"><div className="font-semibold">Payment pending confirmation</div><div className="mt-1">Stock remains unchanged. Check the provider status or cancel this attempt.</div><div className="mt-2 flex flex-wrap gap-x-4 gap-y-2"><button type="button" onClick={() => void checkPendingPayment()} disabled={paymentAction !== null} aria-busy={paymentAction === "checking"} className="cursor-pointer font-semibold underline hover:text-amber-700 disabled:cursor-wait disabled:opacity-60">{paymentAction === "checking" ? "Checking status..." : "Check status"}</button><button type="button" onClick={() => void cancelPendingPayment()} disabled={paymentAction !== null} aria-busy={paymentAction === "cancelling"} className="cursor-pointer font-semibold underline hover:text-amber-700 disabled:cursor-wait disabled:opacity-60">{paymentAction === "cancelling" ? "Cancelling attempt..." : "Cancel attempt"}</button></div>{saleError && <div role="alert" className="mt-2 rounded-md bg-rose-100 p-2 text-rose-800">{saleError}</div>}</div>}
+          {saleError && !pendingPayment && <div role="alert" className="rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{saleError}</div>}
 
           <div className="space-y-2 text-sm text-slate-700">
             <div className="flex items-center justify-between"><span>Subtotal</span><span>{fmt(subtotal)}</span></div>
