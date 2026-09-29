@@ -470,6 +470,9 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const [receiptFormat, setReceiptFormat] = useState<"thermal" | "standard">("thermal");
   const [submitting, setSubmitting] = useState(false);
+  const [cardTerminalOpen, setCardTerminalOpen] = useState(false);
+  const [cardInputMode, setCardInputMode] = useState<"tap" | "insert">("tap");
+  const [cardReading, setCardReading] = useState(false);
   const [paymentAction, setPaymentAction] = useState<"checking" | "cancelling" | null>(null);
   const [saleError, setSaleError] = useState("");
   const [cartError, setCartError] = useState("");
@@ -609,16 +612,16 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
 
   const removeFromCart = (medicineId: string) => setCart((prev) => prev.filter((item) => item.id !== medicineId));
 
-  const completeSale = async (saleId: string) => {
+  const completeSale = async (saleId: string, simulated = false) => {
     const loaded = await onRefresh();
     const sale = loaded.sales.find((entry) => entry.id === saleId);
     if (!sale) throw new Error("The sale was completed, but its receipt details could not be loaded.");
     setReceipt({
       ...sale,
       paymentStatus: sale.status === "COMPLETED" ? "PAID" : sale.status,
-      provider: null,
+      provider: simulated ? "SIMULATED_CARD" : null,
       providerReference: null,
-      simulated: false,
+      simulated,
       items: sale.items.map((item) => ({ ...item, batches: [] })),
     });
     setSearchPage(1);
@@ -656,7 +659,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     setSaleError("");
     try {
       const result = await api.paymentStatus(pendingPayment.paymentId);
-      if (result.status === "PAID") await completeSale(pendingPayment.saleId);
+      if (result.status === "PAID") await completeSale(pendingPayment.saleId,result.provider === "SIMULATED_CARD");
       else if (["FAILED", "CANCELLED", "EXPIRED", "REFUNDED"].includes(result.status)) {
         setPendingPayment(null);
         setIdempotencyKey(crypto.randomUUID());
@@ -711,9 +714,10 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     setPendingPayment({ saleId, paymentId });
     void (async () => {
       try {
-        let paymentStatus = (await api.paymentStatus(paymentId)).status;
+        const payment = await api.paymentStatus(paymentId);
+        let paymentStatus = payment.status;
         if (paymentStatus === "PAID") {
-          await completeSale(saleId);
+          await completeSale(saleId,payment.provider === "SIMULATED_CARD");
           return;
         }
         if (paymentReturn === "cancel" && ["PENDING", "AUTHORIZED"].includes(paymentStatus)) paymentStatus = (await api.cancelPayment(paymentId)).status;
@@ -727,8 +731,8 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     })();
   }, []);
 
-  const submitSale = async () => {
-    if (!cart.length || pendingPayment) return;
+  const submitSale = async (simulatedCardConfirmed = false) => {
+    if (!cart.length || pendingPayment || submitting) return;
     setSaleError("");
     if (discountType !== "none" && !discountId.trim()) {
       setSaleError(`${discountType === "pwd" ? "PWD" : "Senior citizen"} ID number is required for the 20% discount.`);
@@ -736,6 +740,10 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     }
     if (Number(amountReceived || 0) < total && paymentMethod === "Cash") {
       setSaleError("Cash amount must cover the total.");
+      return;
+    }
+    if (paymentMethod === "Card" && !simulatedCardConfirmed) {
+      setCardTerminalOpen(true);
       return;
     }
     setSubmitting(true);
@@ -761,7 +769,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
         void onRefresh().catch(() => undefined);
         return;
       }
-      await completeSale(result.id);
+      await completeSale(result.id,result.simulated);
     } catch (error) {
       setSaleError(errorMessage(error));
       if (error instanceof ApiError && error.status === 402) setIdempotencyKey(crypto.randomUUID());
@@ -769,6 +777,16 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const simulateCardRead = async () => {
+    if (cardReading || submitting) return;
+    setCardReading(true);
+    setSaleError("");
+    await new Promise((resolve) => window.setTimeout(resolve, 900));
+    setCardTerminalOpen(false);
+    setCardReading(false);
+    await submitSale(true);
   };
 
   if (receipt) {
@@ -785,7 +803,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
             <div className="border-y border-dashed border-slate-300 py-3 text-xs text-slate-600"><div className="flex justify-between"><span>Receipt No.:</span><span>{receipt.id}</span></div><div className="flex justify-between"><span>Date:</span><span>{new Date(receipt.transactionDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span></div><div className="flex justify-between"><span>Cashier:</span><span>{receipt.cashierName}</span></div></div>
             <div className="text-xs text-slate-700"><div className="mb-2 grid grid-cols-[1fr_auto_auto] gap-3 border-b border-slate-300 pb-2 font-bold"><span>Product</span><span>Qty</span><span>Price</span></div>{receipt.items.map((item) => <div key={item.medicineId} className="grid grid-cols-[1fr_auto_auto] gap-3 py-1"><span>{item.medicineName}</span><span>{item.quantity}</span><span>{fmt(item.subtotal)}</span></div>)}</div>
             <div className="border-y border-dashed border-slate-300 py-3 text-sm"><div className="flex justify-between text-slate-600"><span>Subtotal</span><span>{fmt(receipt.subtotal)}</span></div><div className="flex justify-between text-slate-600"><span>Discount</span><span>{fmt(receipt.discount)}</span></div><div className="flex justify-between text-slate-600"><span>VAT</span><span>{fmt(receipt.tax)}</span></div><div className="mt-1 flex justify-between text-base font-extrabold text-slate-900"><span>TOTAL</span><span>{fmt(receipt.totalAmount)}</span></div></div>
-            <div className="space-y-1 text-sm text-slate-600"><div>Payment: {receipt.paymentMethod}</div>{receipt.paymentMethod === "Cash" && <><div className="flex justify-between"><span>Cash Received:</span><span>{fmt(receipt.amountReceived)}</span></div><div className="flex justify-between"><span>Change:</span><span>{fmt(receipt.changeAmount)}</span></div></>}</div>
+            <div className="space-y-1 text-sm text-slate-600"><div>Payment: {receipt.paymentMethod}{receipt.simulated ? " (simulated)" : ""}</div>{receipt.paymentMethod === "Cash" && <><div className="flex justify-between"><span>Cash Received:</span><span>{fmt(receipt.amountReceived)}</span></div><div className="flex justify-between"><span>Change:</span><span>{fmt(receipt.changeAmount)}</span></div></>}</div>
             <div className="text-center text-sm font-semibold text-slate-700">Thank you for shopping!</div>
             <div className="receipt-controls flex flex-wrap justify-between gap-2">
               <div className="inline-flex rounded-lg border border-slate-200 p-1"><button aria-pressed={receiptFormat === "thermal"} onClick={() => setReceiptFormat("thermal")} className={`rounded px-2 py-1 text-xs ${receiptFormat === "thermal" ? "bg-teal-700 text-white" : "text-slate-600"}`}>Thermal</button><button aria-pressed={receiptFormat === "standard"} onClick={() => setReceiptFormat("standard")} className={`rounded px-2 py-1 text-xs ${receiptFormat === "standard" ? "bg-teal-700 text-white" : "text-slate-600"}`}>Standard</button></div>
@@ -883,7 +901,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
             <div>
               <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Payment</label>
               <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
-                {['Cash', 'GCash', 'Maya', 'QRPh', 'Card'].map((method) => <option key={method}>{method}</option>)}
+                {['Cash', 'GCash', 'Maya', 'QRPh', 'Card'].map((method) => <option key={method} value={method}>{method === "Card" ? "Card (simulation)" : method}</option>)}
               </select>
             </div>
             <div>
@@ -898,7 +916,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
               <input value={amountReceived} onChange={(e) => setAmountReceived(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm" />
             </div>
           )}
-          {paymentMethod !== "Cash" && <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">You'll continue to the configured payment provider to complete this transaction.</div>}
+          {paymentMethod !== "Cash" && <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">{paymentMethod === "Card" ? "Card payments use a local simulation. No card details are read or charged." : "You'll continue to the configured payment provider to complete this transaction."}</div>}
           {pendingPayment && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900" aria-live="polite"><div className="font-semibold">Payment pending confirmation</div><div className="mt-1">Stock remains unchanged. Check the provider status or cancel this attempt.</div><div className="mt-2 flex flex-wrap gap-x-4 gap-y-2"><button type="button" onClick={() => void checkPendingPayment()} disabled={paymentAction !== null} aria-busy={paymentAction === "checking"} className="cursor-pointer font-semibold underline hover:text-amber-700 disabled:cursor-wait disabled:opacity-60">{paymentAction === "checking" ? "Checking status..." : "Check status"}</button><button type="button" onClick={() => void cancelPendingPayment()} disabled={paymentAction !== null} aria-busy={paymentAction === "cancelling"} className="cursor-pointer font-semibold underline hover:text-amber-700 disabled:cursor-wait disabled:opacity-60">{paymentAction === "cancelling" ? "Cancelling attempt..." : "Cancel attempt"}</button></div>{saleError && <div role="alert" className="mt-2 rounded-md bg-rose-100 p-2 text-rose-800">{saleError}</div>}</div>}
           {saleError && !pendingPayment && <div role="alert" className="rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{saleError}</div>}
 
@@ -910,9 +928,10 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
             {paymentMethod === 'Cash' && <div className="flex items-center justify-between text-sm"><span>Change</span><span>{fmt(change)}</span></div>}
           </div>
 
-          <button onClick={() => void submitSale()} disabled={submitting || cart.length === 0 || Boolean(pendingPayment)} className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white transition-all duration-150 ease-out hover:bg-teal-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50">{submitting ? <span className="inline-flex items-center justify-center gap-2"><span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />Processing...</span> : paymentMethod === "Cash" ? "Complete sale" : `Continue to ${paymentMethod}`}</button>
+          <button type="button" onClick={() => void submitSale()} disabled={submitting || cart.length === 0 || Boolean(pendingPayment)} className="w-full rounded-xl bg-teal-600 px-4 py-3 text-sm font-bold text-white transition-all duration-150 ease-out hover:bg-teal-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50">{submitting ? <span className="inline-flex items-center justify-center gap-2"><span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true" />Processing...</span> : paymentMethod === "Cash" ? "Complete sale" : paymentMethod === "Card" ? "Start simulated card payment" : `Continue to ${paymentMethod}`}</button>
         </div>
       </div>
+      {cardTerminalOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4"><section role="dialog" aria-modal="true" aria-labelledby="simulated-card-title" className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-5 shadow-2xl"><div className="flex items-start justify-between gap-3"><div><h2 id="simulated-card-title" className="text-base font-bold text-slate-900">Simulated card terminal</h2><p className="mt-1 text-xs text-slate-500">This will record a demo payment only.</p></div><button type="button" onClick={() => setCardTerminalOpen(false)} disabled={cardReading || submitting} aria-label="Close simulated card terminal" className="rounded-md px-2 py-1 text-lg leading-none text-slate-500 hover:bg-slate-100 disabled:opacity-50">×</button></div><div className="my-5 rounded-lg bg-slate-900 p-4 text-center text-white"><div className="mx-auto flex h-20 w-32 flex-col justify-between rounded-md border border-slate-500 bg-slate-800 p-3 text-left"><span className="text-[10px] font-semibold uppercase text-slate-300">Demo card</span><span className="text-xs tracking-widest text-slate-400">••••  ••••</span></div><div className="mt-3 text-xs text-teal-200">{cardReading ? "Reading simulated card..." : `Reader ready for ${cardInputMode}`}</div>{cardReading && <div className="mt-2 h-1 overflow-hidden rounded bg-slate-700"><div className="h-full w-1/2 animate-pulse rounded bg-teal-300" /></div>}</div><div className="grid grid-cols-2 gap-2"><button type="button" aria-pressed={cardInputMode === "tap"} onClick={() => setCardInputMode("tap")} disabled={cardReading || submitting} className={`rounded-md border px-3 py-2 text-sm font-semibold ${cardInputMode === "tap" ? "border-teal-700 bg-teal-50 text-teal-800" : "border-slate-200 text-slate-600"}`}>Tap</button><button type="button" aria-pressed={cardInputMode === "insert"} onClick={() => setCardInputMode("insert")} disabled={cardReading || submitting} className={`rounded-md border px-3 py-2 text-sm font-semibold ${cardInputMode === "insert" ? "border-teal-700 bg-teal-50 text-teal-800" : "border-slate-200 text-slate-600"}`}>Insert</button></div><p className="mt-3 text-[11px] text-slate-500">Simulation only. No card data is collected, authorized, or charged.</p><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setCardTerminalOpen(false)} disabled={cardReading || submitting} className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">Back</button><button type="button" onClick={() => void simulateCardRead()} disabled={cardReading || submitting} className="rounded-md bg-teal-700 px-3 py-2 text-sm font-semibold text-white disabled:cursor-wait disabled:opacity-60">{cardReading ? "Reading..." : `Simulate ${cardInputMode}`}</button></div></section></div>}
     </div>
   );
 }

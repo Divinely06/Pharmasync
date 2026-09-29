@@ -799,7 +799,9 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
   const parsed = saleSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_INPUT", error: "Sale details are invalid" });
   const body = parsed.data;
+  const simulatedCard = body.paymentMethod === "Card";
   const simulatedProvider = paymentProviderMode === "dummy" || paymentProviderMode === "sandbox";
+  if (simulatedCard && production && !allowSimulatedPayments) return res.status(503).json({ code: "SIMULATED_PAYMENT_DISABLED", error: "Simulated card payments are disabled in production" });
   if (body.paymentMethod !== "Cash" && production && simulatedProvider && !allowSimulatedPayments) return res.status(503).json({ code: "SIMULATED_PAYMENT_DISABLED", error: "Cashless demo payments are disabled in production" });
   const client = await pool.connect();
   let clientReleased = false;
@@ -807,7 +809,7 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
   try {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [body.idempotencyKey]);
-    const existing = await client.query("SELECT s.id,s.status,p.id AS payment_id,p.status AS payment_status,(SELECT metadata->>'checkoutUrl' FROM payment_events WHERE payment_id=p.id AND event_type='CREATED' ORDER BY occurred_at DESC LIMIT 1) AS checkout_url FROM sales s LEFT JOIN LATERAL (SELECT id,status FROM payment_records WHERE sale_id=s.id ORDER BY created_at DESC LIMIT 1) p ON true WHERE s.idempotency_key=$1", [body.idempotencyKey]);
+    const existing = await client.query("SELECT s.id,s.status,p.id AS payment_id,p.status AS payment_status,p.provider AS payment_provider,(SELECT metadata->>'checkoutUrl' FROM payment_events WHERE payment_id=p.id AND event_type='CREATED' ORDER BY occurred_at DESC LIMIT 1) AS checkout_url FROM sales s LEFT JOIN LATERAL (SELECT id,status,provider FROM payment_records WHERE sale_id=s.id ORDER BY created_at DESC LIMIT 1) p ON true WHERE s.idempotency_key=$1", [body.idempotencyKey]);
     if (existing.rowCount) {
       await client.query("COMMIT");
       transactionCommitted = true;
@@ -819,14 +821,14 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
         try {
           const checkout = await createOrRecoverCheckout(prior.payment_id);
           const statusCode = checkout.status === "PAID" ? 200 : isPaymentInProgress(checkout.status) ? 202 : 402;
-          return res.status(statusCode).json({ id: prior.id, paymentId: prior.payment_id, status: checkout.status, checkoutUrl: checkout.checkoutUrl, duplicate: true });
+          return res.status(statusCode).json({ id: prior.id, paymentId: prior.payment_id, status: checkout.status, provider: checkout.provider, checkoutUrl: checkout.checkoutUrl, simulated: checkout.provider === "DUMMY" || checkout.provider === "SIMULATED_CARD", duplicate: true });
         } catch (error) {
           logError("payment_checkout_setup_failed", error);
           return res.status(502).json({ code: "PAYMENT_SETUP_PENDING", error: "Checkout could not be initialized. Retry to resume this payment attempt." });
         }
       }
       const statusCode = paymentStatus === "PAID" ? 200 : isPaymentInProgress(paymentStatus) ? 202 : 402;
-      return res.status(statusCode).json({ id: prior.id, paymentId: prior.payment_id, status: paymentStatus, checkoutUrl: prior.checkout_url ?? null, duplicate: true, ...(statusCode === 402 ? { error: "Payment was not confirmed. Start a new attempt to retry." } : {}) });
+      return res.status(statusCode).json({ id: prior.id, paymentId: prior.payment_id, status: paymentStatus, provider: prior.payment_provider ?? "CASH", checkoutUrl: prior.checkout_url ?? null, simulated: prior.payment_provider === "DUMMY" || prior.payment_provider === "SIMULATED_CARD", duplicate: true, ...(statusCode === 402 ? { error: "Payment was not confirmed. Start a new attempt to retry." } : {}) });
     }
     const lines: { id: string; quantity: number; unitPrice: number; subtotal: number; brandName: string; allocations: { batchId: string; quantity: number }[]; saleItemId?: string }[] = [];
     for (const item of body.items) {
@@ -858,21 +860,23 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
       line.saleItemId = itemResult.rows[0].id;
     }
     let paymentStatus: PaymentStatus = "PAID";
-    let paymentProviderName = "CASH";
+    let paymentProviderName = simulatedCard ? "SIMULATED_CARD" : "CASH";
     let checkoutUrl: string | null = null;
     if (!cash) {
-      paymentStatus = "PENDING";
-      paymentProviderName = paymentProviderMode.toUpperCase();
-      await client.query("INSERT INTO payment_records (id,sale_id,method,status,provider,provider_reference,idempotency_key,amount) VALUES ($1,$2,$3,'PENDING',$4,NULL,$5,$6)", [paymentId,saleId,body.paymentMethod === "Card" ? "CARD" : "E_WALLET",paymentProviderName,`payment-${body.idempotencyKey}`,total]);
-      await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,NULL,'PENDING','ATTEMPT_CREATED',$3,$4)", [`payment-event-${randomUUID()}`,paymentId,req.user!.id,{ provider:paymentProviderName }]);
+      if (!simulatedCard) {
+        paymentStatus = "PENDING";
+        paymentProviderName = paymentProviderMode.toUpperCase();
+      }
+      await client.query("INSERT INTO payment_records (id,sale_id,method,status,provider,provider_reference,idempotency_key,amount) VALUES ($1,$2,$3,$4,$5,NULL,$6,$7)", [paymentId,saleId,body.paymentMethod === "Card" ? "CARD" : "E_WALLET",paymentStatus,paymentProviderName,`payment-${body.idempotencyKey}`,total]);
+      await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,NULL,$3,$4,$5,$6)", [`payment-event-${randomUUID()}`,paymentId,paymentStatus,simulatedCard ? "SIMULATED_CARD" : "ATTEMPT_CREATED",req.user!.id,{ provider:paymentProviderName,simulated:simulatedCard }]);
     }
     if (paymentStatus === "PAID") {
       await fulfillSale(client,saleId,req.user!.id);
-      await audit(client,req.user!.id,"SALE_COMPLETED","SALE",saleId,{ total,paymentMethod:body.paymentMethod, discountType:body.discountType, discountIdProvided:Boolean(body.discountId.trim()), simulated:paymentProviderName === "DUMMY" });
+      await audit(client,req.user!.id,"SALE_COMPLETED","SALE",saleId,{ total,paymentMethod:body.paymentMethod, discountType:body.discountType, discountIdProvided:Boolean(body.discountId.trim()), simulated:paymentProviderName === "DUMMY" || simulatedCard });
       if (!cash) await audit(client,req.user!.id,"PAYMENT_PAID","PAYMENT",paymentId!,{ provider:paymentProviderName,saleId });
     } else {
       if (!isPaymentInProgress(paymentStatus)) await client.query("UPDATE sales SET status='VOIDED' WHERE id=$1", [saleId]);
-      await audit(client,req.user!.id,"PAYMENT_ATTEMPT","PAYMENT",paymentId ?? saleId,{ paymentStatus,simulated:paymentProviderName === "DUMMY",saleId });
+      await audit(client,req.user!.id,"PAYMENT_ATTEMPT","PAYMENT",paymentId ?? saleId,{ paymentStatus,simulated:paymentProviderName === "DUMMY" || simulatedCard,saleId });
     }
     await client.query("COMMIT");
     transactionCommitted = true;
@@ -882,7 +886,7 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
       try {
         const checkout = await createOrRecoverCheckout(paymentId!);
         const statusCode = checkout.status === "PAID" ? 201 : isPaymentInProgress(checkout.status) ? 202 : 402;
-        return res.status(statusCode).json({ id: saleId, paymentId, status: checkout.status, provider: checkout.provider, checkoutUrl: checkout.checkoutUrl, simulated: checkout.provider === "DUMMY", totalAmount: total, changeAmount: 0, items: lines });
+        return res.status(statusCode).json({ id: saleId, paymentId, status: checkout.status, provider: checkout.provider, checkoutUrl: checkout.checkoutUrl, simulated: checkout.provider === "DUMMY" || checkout.provider === "SIMULATED_CARD", totalAmount: total, changeAmount: 0, items: lines });
       } catch (error) {
         logError("payment_checkout_setup_failed", error);
         return res.status(502).json({ code: "PAYMENT_SETUP_PENDING", error: "Checkout could not be initialized. Retry to resume this payment attempt." });
