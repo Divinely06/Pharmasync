@@ -167,7 +167,7 @@ const reconcilePayment = async (paymentId: string, remote: Awaited<ReturnType<ty
       await client.query("UPDATE sales SET status='VOIDED' WHERE id=$1 AND status='PENDING'", [current.sale_id]);
     }
     await client.query("UPDATE payment_records SET status=$2,updated_at=now() WHERE id=$1", [paymentId,remote.status]);
-    await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,$3,$4,'PROVIDER_UPDATE',$5,$6)", [`payment-event-${randomUUID()}`,paymentId,current.status,current.cashier_id,{ provider:current.provider,providerReference:current.provider_reference,source,eventId:eventId ?? null }]);
+    await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,$3,$4,'PROVIDER_UPDATE',$5,$6)", [`payment-event-${randomUUID()}`,paymentId,current.status,remote.status,current.cashier_id,{ provider:current.provider,providerReference:current.provider_reference,source,eventId:eventId ?? null }]);
     await audit(client,current.cashier_id,remote.status === "PAID" ? "PAYMENT_PAID" : "PAYMENT_STATUS_UPDATED","PAYMENT",paymentId,{ provider:current.provider,saleId:current.sale_id,status:remote.status,source,eventId:eventId ?? null });
     await client.query("COMMIT");
     return remote.status;
