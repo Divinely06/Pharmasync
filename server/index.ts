@@ -34,6 +34,7 @@ function createPool() {
 let pool = createPool();
 const paymentProvider = createPaymentProvider();
 const app: Application = express();
+if (serverless) app.set("trust proxy", 1);
 const sessionCookie = "pharmasync_session";
 const sessionLifetime = 8 * 60 * 60 * 1000;
 app.disable("x-powered-by");
@@ -46,10 +47,11 @@ app.use((req, res, next) => {
 if (!process.env.VERCEL) await applyDatabaseSchema(pool);
 const logError = (event: string, error: unknown) => {
   const message = error instanceof Error ? error.message : "Unknown error";
+  const databaseError = error as { code?: string; table?: string; column?: string; constraint?: string };
   const redactedMessage = message
     .replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, "[database-url]")
     .replace(/(password|token|secret|api[_-]?key)=([^&\s]+)/gi, "$1=[REDACTED]");
-  console.error(JSON.stringify({ level: "error", event, message: redactedMessage, code: (error as { code?: string })?.code ?? null, timestamp: new Date().toISOString() }));
+  console.error(JSON.stringify({ level: "error", event, message: redactedMessage, code: databaseError.code ?? null, table: databaseError.table ?? null, column: databaseError.column ?? null, constraint: databaseError.constraint ?? null, timestamp: new Date().toISOString() }));
 };
 
 app.use(express.json({
@@ -267,8 +269,9 @@ app.post("/api/webhooks/paymongo", async (req, res) => {
   await reconcilePayment(payment.rows[0].id,remote,`WEBHOOK:${event.eventType}`,event.eventId);
   res.status(200).json({ received: true });
 });
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false, message: { code: "RATE_LIMITED", error: "Too many login attempts. Try again later." } });
-const backupLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 1, standardHeaders: "draft-8", legacyHeaders: false, skipFailedRequests: true, message: { code: "RATE_LIMITED", error: "A backup was already requested recently" } });
+const rateLimitValidation = { forwardedHeader: false };
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false, validate: rateLimitValidation, message: { code: "RATE_LIMITED", error: "Too many login attempts. Try again later." } });
+const backupLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 1, standardHeaders: "draft-8", legacyHeaders: false, skipFailedRequests: true, validate: rateLimitValidation, message: { code: "RATE_LIMITED", error: "A backup was already requested recently" } });
 app.post("/api/login", loginLimiter, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ code: "INVALID_INPUT", error: "Username and password are required" });
