@@ -66,6 +66,21 @@ describe('pharmacy system logic', () => {
     expect(getVisibleCategoryFilters(medicines, (medicine) => medicine.quantity > 0)).toEqual(['All', 'Cardiovascular']);
   });
 
+  it('preserves taxonomy order for overlapping visible categories', () => {
+    const medicines = [
+      { medicineType: 'Cardiovascular/Lipid', quantity: 5, expirationDate: '2030-01-01' },
+      { medicineType: 'Antibiotic', quantity: 3, expirationDate: '2030-01-01' },
+      { medicineType: 'Respiratory', quantity: 0, expirationDate: '2030-01-01' },
+    ];
+
+    expect(getVisibleCategoryFilters(medicines, (medicine) => medicine.quantity > 0)).toEqual([
+      'All',
+      'Antibiotic',
+      'Cardiovascular',
+      'Cardiovascular/Lipid',
+    ]);
+  });
+
   it('creates audit entries with clear metadata', () => {
     const log = buildAuditLog({
       userId: 'u-1',

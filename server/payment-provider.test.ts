@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPaymentProvider, DummyPaymentProvider } from "./payment-provider.js";
+import { createPaymentProvider, DummyPaymentProvider, isPaymentInProgress } from "./payment-provider.js";
 
 const request = { saleId: "sale-1", amount: 100, currency: "PHP", method: "E_WALLET" as const, idempotencyKey: "checkout-1" };
 
 describe("dummy payment provider", () => {
+  it("keeps pending and authorized payments in the in-progress flow", () => {
+    expect(isPaymentInProgress("PENDING")).toBe(true);
+    expect(isPaymentInProgress("AUTHORIZED")).toBe(true);
+    expect(isPaymentInProgress("PAID")).toBe(false);
+    expect(isPaymentInProgress("FAILED")).toBe(false);
+  });
+
   it.each([
     ["success", "PAID"],
     ["pending", "PENDING"],
@@ -66,7 +73,9 @@ describe("dummy payment provider", () => {
       const result = await provider.createPayment(request);
       expect(result.provider).toBe("PAYMONGO");
       expect(result.providerReference).toBe("pm_int_123");
-      expect(fetchMock).toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledWith("https://api.paymongo.com/v1/payment_intents", expect.objectContaining({
+        headers: expect.objectContaining({ "Idempotency-Key": request.idempotencyKey }),
+      }));
     } finally {
       globalThis.fetch = originalFetch;
       delete process.env.PAYMONGO_SECRET_KEY;

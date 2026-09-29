@@ -5,6 +5,8 @@ export type PaymentStatus = "PENDING" | "AUTHORIZED" | "PAID" | "FAILED" | "CANC
 export type PaymentRequest = { saleId: string; amount: number; currency: string; method: PaymentMethod; idempotencyKey: string };
 export type PaymentResult = { status: PaymentStatus; provider: string; providerReference: string | null; failureCode?: string };
 
+export const isPaymentInProgress = (status: PaymentStatus) => status === "PENDING" || status === "AUTHORIZED";
+
 export interface PaymentProvider {
   createPayment(request: PaymentRequest): Promise<PaymentResult>;
   getPayment(providerReference: string): Promise<PaymentResult | null>;
@@ -221,6 +223,7 @@ export class PayMongoProvider extends SandboxPaymentProvider {
   async createPayment(request: PaymentRequest): Promise<PaymentResult> {
     const payload = await this.request<{ data?: { id?: string; attributes?: { status?: string; id?: string; payment_intent_id?: string; failure_code?: string } } }>('/payment_intents', {
       method: "POST",
+      headers: { "Idempotency-Key": request.idempotencyKey },
       body: JSON.stringify({
         data: {
           attributes: {

@@ -9,13 +9,16 @@ const signIn = async (page: import("@playwright/test").Page, username: string, p
 };
 
 test("admin can find an actor's sign-in events in the audit feed", async ({ page }) => {
+  await signIn(page, "cashier", "cashier123");
+  await page.getByRole("button", { name: "Logout" }).click();
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
   await signIn(page, "admin", "admin123");
   await page.getByRole("button", { name: "Audit Logs" }).click();
   await page.getByLabel("Filter audit by person").fill("cashier");
   await page.getByLabel("Filter audit by action").fill("LOGIN");
   await page.getByRole("button", { name: "Apply" }).click();
   await expect(page.getByRole("table").getByText("LOGIN").first()).toBeVisible();
-  await expect(page.getByRole("table").getByText("Cashier").first()).toBeVisible();
+  await expect(page.getByRole("table").getByText("@cashier", { exact: true })).toBeVisible();
 });
 
 test("cashier navigation excludes admin screens and POS search reports no match", async ({ page }) => {

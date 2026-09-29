@@ -56,25 +56,35 @@ const navMeta: { id: Page; label: string; area: AccessArea; icon: React.ReactNod
 
 const emptyState: PharmacyState = { users: [], suppliers: [], medicines: [], medicineBatches: [], purchases: [], purchaseItems: [], sales: [], saleItems: [], inventoryTransactions: [], auditLogs: [] };
 
-const hydrateState = (source: PharmacyState): PharmacyState => ({
-  ...source,
-  sales: source.sales.map((sale) => ({
-    ...sale,
-    transactionTime: new Date(sale.transactionDate).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }),
-    items: source.saleItems.filter((item) => item.saleId === sale.id).map((item) => ({
-      medicineId: item.medicineId,
-      medicineName: item.medicineName,
-      quantity: item.quantity,
-      unitPrice: item.unitPrice,
-      subtotal: item.subtotal,
+const hydrateState = (source: PharmacyState): PharmacyState => {
+  const saleItemsBySale = new Map<string, PharmacyState["saleItems"]>();
+  for (const item of source.saleItems) {
+    const items = saleItemsBySale.get(item.saleId);
+    if (items) items.push(item);
+    else saleItemsBySale.set(item.saleId, [item]);
+  }
+
+  return {
+    ...source,
+    sales: source.sales.map((sale) => ({
+      ...sale,
+      transactionTime: transactionTimeFormatter.format(new Date(sale.transactionDate)),
+      items: (saleItemsBySale.get(sale.id) ?? []).map((item) => ({
+        medicineId: item.medicineId,
+        medicineName: item.medicineName,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        subtotal: item.subtotal,
+      })),
     })),
-  })),
-});
+  };
+};
 
 const errorMessage = (error: unknown) => error instanceof ApiError ? `${error.message} (${error.status}${error.code ? ` · ${error.code}` : ""})` : error instanceof Error ? error.message : "The request could not be completed.";
 const today = () => dateKey(new Date());
 const daysUntil = (date: string | Date) => (Date.parse(`${dateKey(date)}T00:00:00Z`) - Date.parse(`${today()}T00:00:00Z`)) / 86400000;
 const isExpiringSoon = (date: string | Date) => daysUntil(date) > 0 && daysUntil(date) <= 90;
+const transactionTimeFormatter = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
 const chartCurrency = (value: number) => {
   if (value === 0) return "₱0";
   if (Math.abs(value) >= 1000) {
@@ -404,12 +414,18 @@ function DashboardPage({ state, onNavigate, onLowStock, onExpiringSoon }: { stat
   const weekStart = new Date();
   weekStart.setHours(0, 0, 0, 0);
   weekStart.setDate(weekStart.getDate() - 6);
-  const weeklySales = Array.from({ length: 7 }, (_, index) => {
+  const weekDays = Array.from({ length: 7 }, (_, index) => {
     const day = new Date(weekStart);
     day.setDate(weekStart.getDate() + index);
-    const key = dateKey(day);
-    return { day: day.toLocaleDateString("en", { weekday: "short" }), revenue: state.sales.filter((sale) => sale.status === "COMPLETED" && dateKey(sale.transactionDate) === key).reduce((sum, sale) => sum + sale.totalAmount, 0) };
+    return { key: dateKey(day), day: day.toLocaleDateString("en", { weekday: "short" }) };
   });
+  const revenueByDay = new Map(weekDays.map(({ key }) => [key, 0]));
+  for (const sale of state.sales) {
+    if (sale.status !== "COMPLETED") continue;
+    const key = dateKey(sale.transactionDate);
+    if (revenueByDay.has(key)) revenueByDay.set(key, revenueByDay.get(key)! + sale.totalAmount);
+  }
+  const weeklySales = weekDays.map(({ key, day }) => ({ day, revenue: revenueByDay.get(key)! }));
 
   const paymentBreakdown = Object.entries(
     todaySales.reduce<Record<string, number>>((acc, sale) => {
@@ -609,9 +625,13 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     return cleanup;
   }, [loadRemoteMedicines]);
 
-  const availableStock = (medicineId: string) => state.medicineBatches
-    .filter((batch) => batch.medicineId === medicineId && batch.quantity > 0 && batch.expirationDate >= today())
-    .reduce((total, batch) => total + batch.quantity, 0);
+  const availableStockByMedicine = new Map<string, number>();
+  const currentDay = today();
+  for (const batch of state.medicineBatches) {
+    if (batch.quantity <= 0 || batch.expirationDate < currentDay) continue;
+    availableStockByMedicine.set(batch.medicineId, (availableStockByMedicine.get(batch.medicineId) ?? 0) + batch.quantity);
+  }
+  const availableStock = (medicineId: string) => availableStockByMedicine.get(medicineId) ?? 0;
 
   const visibleCategories = getVisibleCategoryFilters(remoteMedicines, (medicine) => availableStock(medicine.id) > 0);
   const categoryFilters = visibleCategories.includes(category) ? category : "All";
@@ -718,7 +738,15 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
   const cancelPendingPayment = async () => {
     if (!pendingPayment) return;
     try {
-      await api.cancelPayment(pendingPayment.paymentId);
+      const result = await api.cancelPayment(pendingPayment.paymentId);
+      if (result.status === "PAID") {
+        await completeSale(pendingPayment.saleId);
+        return;
+      }
+      if (result.status !== "CANCELLED") {
+        setSaleError(`Payment is ${result.status.toLowerCase()}. Check its status before retrying.`);
+        return;
+      }
       setPendingPayment(null);
       setIdempotencyKey(crypto.randomUUID());
       setSaleError("Payment cancelled. The cart is unchanged and can be retried.");
@@ -747,7 +775,7 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
         amountReceived: Number(amountReceived || total),
         idempotencyKey,
       });
-      if (result.status === "PENDING") {
+      if (result.status === "PENDING" || result.status === "AUTHORIZED") {
         if (!result.paymentId) throw new Error("Pending payment did not return a payment reference.");
         setPendingPayment({ saleId: result.id, paymentId: result.paymentId });
         setSaleError("Payment is pending. Do not submit the order again; stock has not changed.");
@@ -1010,9 +1038,13 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
         referenceNumber: purchaseDraft.referenceNumber,
         items: [{ medicineId: purchaseDraft.medicineId, quantity: Number(purchaseDraft.quantity), unitCost: Number(purchaseDraft.unitCost), batchNumber: purchaseDraft.batchNumber, expirationDate: purchaseDraft.expirationDate }],
       });
-      await onRefresh();
       setPurchaseDraft((previous) => ({ ...previous, referenceNumber: `PO-${Date.now()}`, quantity: "1", batchNumber: "", expirationDate: "" }));
-    } catch (error) { setOperationError(errorMessage(error)); }
+    } catch (error) {
+      setOperationError(errorMessage(error));
+      return;
+    }
+    try { await onRefresh(); }
+    catch (error) { setOperationError(`Purchase order was created, but the list could not refresh: ${errorMessage(error)}. Do not create it again; retry the refresh when the database is available.`); }
   };
 
   const receivePurchase = async (purchaseId: string) => {
@@ -1021,8 +1053,10 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
 
   const performReceivePurchase = async (purchaseId: string) => {
     setOperationError("");
-    try { await api.receivePurchase(purchaseId); await onRefresh(); }
-    catch (error) { setOperationError(errorMessage(error)); }
+    try { await api.receivePurchase(purchaseId); }
+    catch (error) { setOperationError(errorMessage(error)); return; }
+    try { await onRefresh(); }
+    catch (error) { setOperationError(`Purchase was received, but inventory could not refresh: ${errorMessage(error)}. Do not receive it again; retry the refresh when the database is available.`); }
   };
 
   const cancelPurchase = async (purchaseId: string) => {
@@ -1031,8 +1065,10 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
 
   const performCancelPurchase = async (purchaseId: string) => {
     setOperationError("");
-    try { await api.cancelPurchase(purchaseId); await onRefresh(); }
-    catch (error) { setOperationError(errorMessage(error)); }
+    try { await api.cancelPurchase(purchaseId); }
+    catch (error) { setOperationError(errorMessage(error)); return; }
+    try { await onRefresh(); }
+    catch (error) { setOperationError(`Purchase was cancelled, but the list could not refresh: ${errorMessage(error)}. Do not cancel it again; retry the refresh when the database is available.`); }
   };
 
   const recordMovement = async () => {
@@ -1043,8 +1079,12 @@ function InventoryPage({ state, onRefresh, lowStockOnly, expiringSoonOnly, onSho
     setOperationError("");
     try {
       await api.recordInventoryMovement({ ...movementDraft, quantity: Number(movementDraft.quantity) });
-      await onRefresh();
-    } catch (error) { setOperationError(errorMessage(error)); }
+    } catch (error) {
+      setOperationError(errorMessage(error));
+      return;
+    }
+    try { await onRefresh(); }
+    catch (error) { setOperationError(`Stock movement was recorded, but inventory could not refresh: ${errorMessage(error)}. Do not record it again; retry the refresh when the database is available.`); }
   };
 
   const deleteItem = async (itemId: string) => {
@@ -1258,10 +1298,11 @@ function SuppliersPage({ state, onRefresh }: { state: PharmacyState; onRefresh: 
   const performSave = async () => {
     try {
       await api.saveSupplier(editingId ?? undefined, draft);
-      await onRefresh();
-      setDraft({});
-      setEditingId(null);
-    } catch (error) { window.alert(errorMessage(error)); }
+    } catch (error) { window.alert(errorMessage(error)); return; }
+    setDraft({});
+    setEditingId(null);
+    try { await onRefresh(); }
+    catch (error) { window.alert(`Supplier was saved, but the list could not refresh: ${errorMessage(error)}. Do not submit it again; retry the refresh when the database is available.`); }
   };
 
   const remove = async (id: string) => {
@@ -1343,10 +1384,11 @@ function UsersPage({ state, onRefresh, currentUser }: { state: PharmacyState; on
     try {
       if (editingUserId) await api.updateUser(editingUserId, { fullName: draft.fullName!, email: draft.email!, role: draft.role ?? "CASHIER" });
       else await api.createUser({ username: String(draft.username), fullName: String(draft.fullName), email: String(draft.email), password: String(draft.password), role: draft.role ?? "CASHIER" });
-      await onRefresh();
-      setDraft({ password: "" });
-      setEditingUserId(null);
-    } catch (error) { window.alert(errorMessage(error)); }
+    } catch (error) { window.alert(errorMessage(error)); return; }
+    setDraft({ password: "" });
+    setEditingUserId(null);
+    try { await onRefresh(); }
+    catch (error) { window.alert(`User was saved, but the roster could not refresh: ${errorMessage(error)}. Do not submit it again; retry the refresh when the database is available.`); }
   };
 
   const deactivate = async (user: PharmacyUser) => {

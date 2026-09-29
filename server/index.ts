@@ -10,7 +10,7 @@ import { rateLimit } from "express-rate-limit";
 import { auditFilterSchema, buildSessionCookieOptions, inventoryMovementSchema, isRequestOriginAllowed, listFilterSchema, loginSchema, medicineSchema, medicineUpdateSchema, passwordChangeSchema, passwordResetSchema, purchaseSchema, reportFilterSchema, saleSchema, sessionTokenSchema, supplierSchema, userCreateSchema, userUpdateSchema, validateSaleTotals } from "./validation.js";
 import { allocateFefo } from "./inventory.js";
 import { createLogicalBackup, dumpDatabase } from "./backup.js";
-import { createPaymentProvider, type PaymentStatus } from "./payment-provider.js";
+import { createPaymentProvider, isPaymentInProgress, type PaymentStatus } from "./payment-provider.js";
 import { applyDatabaseSchema, missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from "./db.js";
 
 const connectionString = normalizeDatabaseUrl(process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI ?? "");
@@ -644,7 +644,7 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
       await client.query("COMMIT");
       const prior = existing.rows[0];
       const paymentStatus = prior.payment_status ?? (prior.status === "COMPLETED" ? "PAID" : prior.status);
-      const statusCode = paymentStatus === "PENDING" ? 202 : paymentStatus === "PAID" ? 200 : 402;
+      const statusCode = paymentStatus === "PAID" ? 200 : isPaymentInProgress(paymentStatus) ? 202 : 402;
       return res.status(statusCode).json({ id: prior.id, paymentId: prior.payment_id, status: paymentStatus, duplicate: true, ...(statusCode === 402 ? { error: "Payment was not confirmed. Start a new attempt to retry." } : {}) });
     }
     const lines: { id: string; quantity: number; unitPrice: number; subtotal: number; brandName: string; allocations: { batchId: string; quantity: number }[]; saleItemId?: string }[] = [];
@@ -676,10 +676,12 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
       line.saleItemId = itemResult.rows[0].id;
     }
     let paymentStatus: PaymentStatus = "PAID";
+    let paymentProviderName = "CASH";
     let paymentId: string | null = null;
     if (!cash) {
       const result = await paymentProvider.createPayment({ saleId,amount:total,currency:"PHP",method:body.paymentMethod === "Card" ? "CARD" : "E_WALLET",idempotencyKey:`payment-${body.idempotencyKey}` });
       paymentStatus = result.status;
+      paymentProviderName = result.provider;
       paymentId = `pay-${randomUUID()}`;
       await client.query("INSERT INTO payment_records (id,sale_id,method,status,provider,provider_reference,idempotency_key,amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [paymentId,saleId,body.paymentMethod === "Card" ? "CARD" : "E_WALLET",result.status,result.provider,result.providerReference,`payment-${body.idempotencyKey}`,total]);
       await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,NULL,$3,'CREATED',$4,$5)", [`payment-event-${randomUUID()}`,paymentId,result.status,req.user!.id,{ provider:result.provider,failureCode:result.failureCode ?? null }]);
@@ -697,13 +699,13 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
         await client.query("INSERT INTO inventory_transactions (id,medicine_id,transaction_type,quantity,previous_quantity,resulting_quantity,reference_id,performed_by,occurred_at,notes) VALUES ($1,$2,'SALE',$3,$4,$5,$6,$7,now(),$8)", [`inv-${randomUUID()}`,line.id,line.quantity,stock.rows[0].quantity+line.quantity,stock.rows[0].quantity,saleId,req.user!.id,`POS sale ${saleId}`]);
       }
       await audit(client,req.user!.id,"SALE_COMPLETED","SALE",saleId,{ total,paymentMethod:body.paymentMethod, discountType:body.discountType, discountIdProvided:Boolean(body.discountId.trim()), simulated:!cash });
-      if (!cash) await audit(client,req.user!.id,"PAYMENT_PAID","PAYMENT",paymentId!,{ provider:"DUMMY",saleId });
+      if (!cash) await audit(client,req.user!.id,"PAYMENT_PAID","PAYMENT",paymentId!,{ provider:paymentProviderName,saleId });
     } else {
-      if (paymentStatus !== "PENDING") await client.query("UPDATE sales SET status='VOIDED' WHERE id=$1", [saleId]);
-      await audit(client,req.user!.id,"PAYMENT_ATTEMPT","PAYMENT",paymentId ?? saleId,{ paymentStatus,simulated:true,saleId });
+      if (!isPaymentInProgress(paymentStatus)) await client.query("UPDATE sales SET status='VOIDED' WHERE id=$1", [saleId]);
+      await audit(client,req.user!.id,"PAYMENT_ATTEMPT","PAYMENT",paymentId ?? saleId,{ paymentStatus,simulated:paymentProviderName === "DUMMY",saleId });
     }
     await client.query("COMMIT");
-    res.status(paymentStatus === "PAID" ? 201 : paymentStatus === "PENDING" ? 202 : 402).json({ id: saleId, paymentId, status: paymentStatus, simulated: !cash, totalAmount: total, changeAmount: cash ? received-total : 0, items: lines });
+    res.status(paymentStatus === "PAID" ? 201 : isPaymentInProgress(paymentStatus) ? 202 : 402).json({ id: saleId, paymentId, status: paymentStatus, simulated: paymentProviderName === "DUMMY", totalAmount: total, changeAmount: cash ? received-total : 0, items: lines });
   } catch (error) {
     await client.query("ROLLBACK");
     const failure = error as Error & { status?: number; code?: string; constraint?: string };
