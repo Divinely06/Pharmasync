@@ -113,11 +113,17 @@ CREATE TABLE IF NOT EXISTS payment_records (
   idempotency_key TEXT NOT NULL UNIQUE,
   amount NUMERIC(12,2) NOT NULL CHECK (amount >= 0),
   refund_amount NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (refund_amount >= 0 AND refund_amount <= amount),
+  refund_status TEXT CHECK (refund_status IS NULL OR refund_status IN ('NONE','PENDING','SUCCEEDED','FAILED')),
+  refund_provider_reference TEXT UNIQUE,
+  refund_requested_amount NUMERIC(12,2) CHECK (refund_requested_amount IS NULL OR (refund_requested_amount >= 0 AND refund_requested_amount <= amount)),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 ALTER TABLE payment_records ADD COLUMN IF NOT EXISTS refund_amount NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (refund_amount >= 0 AND refund_amount <= amount);
+ALTER TABLE payment_records ADD COLUMN IF NOT EXISTS refund_status TEXT;
+ALTER TABLE payment_records ADD COLUMN IF NOT EXISTS refund_provider_reference TEXT;
+ALTER TABLE payment_records ADD COLUMN IF NOT EXISTS refund_requested_amount NUMERIC(12,2);
 
 CREATE TABLE IF NOT EXISTS payment_events (
   id TEXT PRIMARY KEY,
@@ -297,6 +303,8 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_records'::regclass AND conname='payment_records_status_check') THEN ALTER TABLE payment_records ADD CONSTRAINT payment_records_status_check CHECK (status IN ('PENDING','AUTHORIZED','PAID','FAILED','CANCELLED','EXPIRED','REFUNDED')); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_records'::regclass AND conname='payment_records_amount_check') THEN ALTER TABLE payment_records ADD CONSTRAINT payment_records_amount_check CHECK (amount >= 0); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_records'::regclass AND conname='payment_records_refund_amount_check') THEN ALTER TABLE payment_records ADD CONSTRAINT payment_records_refund_amount_check CHECK (refund_amount >= 0 AND refund_amount <= amount); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_records'::regclass AND conname='payment_records_refund_status_check') THEN ALTER TABLE payment_records ADD CONSTRAINT payment_records_refund_status_check CHECK (refund_status IS NULL OR refund_status IN ('NONE','PENDING','SUCCEEDED','FAILED')); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_records'::regclass AND conname='payment_records_refund_requested_amount_check') THEN ALTER TABLE payment_records ADD CONSTRAINT payment_records_refund_requested_amount_check CHECK (refund_requested_amount IS NULL OR (refund_requested_amount >= 0 AND refund_requested_amount <= amount)); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_events'::regclass AND conname='payment_events_status_check') THEN ALTER TABLE payment_events ADD CONSTRAINT payment_events_status_check CHECK (status IN ('PENDING','AUTHORIZED','PAID','FAILED','CANCELLED','EXPIRED','REFUNDED')); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.payment_events'::regclass AND conname='payment_events_previous_status_check') THEN ALTER TABLE payment_events ADD CONSTRAINT payment_events_previous_status_check CHECK (previous_status IS NULL OR previous_status IN ('PENDING','AUTHORIZED','PAID','FAILED','CANCELLED','EXPIRED','REFUNDED')); END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.sale_items'::regclass AND conname='sale_items_quantity_check') THEN ALTER TABLE sale_items ADD CONSTRAINT sale_items_quantity_check CHECK (quantity > 0); END IF;

@@ -167,6 +167,68 @@ const reconcilePayment = async (paymentId: string, remote: Awaited<ReturnType<ty
     throw error;
   } finally { client.release(); }
 };
+const reconcileRefund = async (paymentId: string, refund: Awaited<ReturnType<typeof paymentProvider.refundPayment>>, requestedAmount: number, userId: string) => {
+  if (!refund) return null;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const locked = await client.query("SELECT status,provider,sale_id,refund_status FROM payment_records WHERE id=$1 FOR UPDATE", [paymentId]);
+    if (!locked.rowCount) { await client.query("COMMIT"); return null; }
+    const current = locked.rows[0];
+    if (current.status === "REFUNDED") { await client.query("COMMIT"); return "REFUNDED" as const; }
+    if (current.status !== "PAID") throw Object.assign(new Error("Only paid attempts can be refunded"), { status: 409, code: "INVALID_PAYMENT_STATE" });
+    const refundStatus = refund.status === "REFUNDED" ? "SUCCEEDED" : refund.status === "FAILED" ? "FAILED" : "PENDING";
+    if (refundStatus === "SUCCEEDED") {
+      await client.query("UPDATE payment_records SET status='REFUNDED',refund_status='SUCCEEDED',refund_amount=$2,refund_requested_amount=$2,refund_provider_reference=COALESCE($3,refund_provider_reference),updated_at=now() WHERE id=$1", [paymentId,requestedAmount,refund.providerReference]);
+    } else {
+      await client.query("UPDATE payment_records SET refund_status=$2,refund_requested_amount=$3,refund_provider_reference=COALESCE($4,refund_provider_reference),updated_at=now() WHERE id=$1", [paymentId,refundStatus,requestedAmount,refund.providerReference]);
+    }
+    const eventType = refundStatus === "SUCCEEDED" ? "REFUND" : refundStatus === "PENDING" ? "REFUND_PENDING" : "REFUND_FAILED";
+    await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,$3,$4,$5,$6,$7)", [`payment-event-${randomUUID()}`,paymentId,refundStatus === "SUCCEEDED" ? "PAID" : current.status,refundStatus === "SUCCEEDED" ? "REFUNDED" : current.status,eventType,userId,{ amount:requestedAmount,provider:current.provider,refundReference:refund.providerReference ?? null }]);
+    await audit(client,userId,refundStatus === "SUCCEEDED" ? "PAYMENT_REFUNDED" : refundStatus === "PENDING" ? "PAYMENT_REFUND_PENDING" : "PAYMENT_REFUND_FAILED","PAYMENT",paymentId,{ saleId:current.sale_id,amount:requestedAmount,provider:current.provider,refundReference:refund.providerReference ?? null });
+    await client.query("COMMIT");
+    return refundStatus === "SUCCEEDED" ? "REFUNDED" : refundStatus;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally { client.release(); }
+};
+const createOrRecoverCheckout = async (paymentId: string) => {
+  const lookup = await pool.query('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",p.idempotency_key AS "idempotencyKey",p.amount::float AS amount,s.payment_method AS "paymentMethod" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1', [paymentId]);
+  if (!lookup.rowCount) throw Object.assign(new Error("Payment attempt not found"), { status: 404, code: "PAYMENT_NOT_FOUND" });
+  const current = lookup.rows[0];
+  if (!isPaymentInProgress(current.status)) return { status: current.status as PaymentStatus, provider: current.provider, providerReference: current.providerReference, checkoutUrl: null };
+  if (current.providerReference) {
+    const created = await pool.query("SELECT metadata->>'checkoutUrl' AS checkout_url FROM payment_events WHERE payment_id=$1 AND event_type='CREATED' ORDER BY occurred_at DESC LIMIT 1", [paymentId]);
+    return { status: current.status as PaymentStatus, provider: current.provider, providerReference: current.providerReference, checkoutUrl: created.rows[0]?.checkout_url ?? null };
+  }
+  const origin = process.env.CLIENT_ORIGIN?.split(",")[0]?.trim() ?? (production ? "" : "http://localhost:4175");
+  if (!origin) throw Object.assign(new Error("CLIENT_ORIGIN is required for hosted checkout"), { status: 503, code: "PAYMENT_RETURN_ORIGIN_MISSING" });
+  const returnUrl = new URL("/", origin);
+  returnUrl.searchParams.set("payment_sale", current.saleId);
+  returnUrl.searchParams.set("payment_id", paymentId);
+  const successUrl = new URL(returnUrl);
+  successUrl.searchParams.set("payment_return", "success");
+  const cancelUrl = new URL(returnUrl);
+  cancelUrl.searchParams.set("payment_return", "cancel");
+  const method: PaymentMethod = current.paymentMethod === "Card" ? "CARD" : current.paymentMethod === "GCash" ? "GCASH" : "MAYA";
+  const createdPayment = await paymentProvider.createPayment({ saleId:current.saleId,amount:current.amount,currency:"PHP",method,idempotencyKey:current.idempotencyKey,successUrl:successUrl.toString(),cancelUrl:cancelUrl.toString() });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const locked = await client.query("SELECT status,provider_reference FROM payment_records WHERE id=$1 FOR UPDATE", [paymentId]);
+    if (!locked.rowCount) throw Object.assign(new Error("Payment attempt not found"), { status: 404, code: "PAYMENT_NOT_FOUND" });
+    if (!locked.rows[0].provider_reference && isPaymentInProgress(locked.rows[0].status)) {
+      await client.query("UPDATE payment_records SET provider=$2,provider_reference=$3,updated_at=now() WHERE id=$1", [paymentId,createdPayment.provider,createdPayment.providerReference]);
+      await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) SELECT $1,$2,NULL,'PENDING','CREATED',cashier_id,$3 FROM sales WHERE id=$4", [`payment-event-${randomUUID()}`,paymentId,{ provider:createdPayment.provider,failureCode:createdPayment.failureCode ?? null,checkoutUrl:createdPayment.checkoutUrl ?? null },current.saleId]);
+    }
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+  await reconcilePayment(paymentId,createdPayment,"CHECKOUT_CREATED");
+  const saved = await pool.query("SELECT status,provider,provider_reference AS provider_reference FROM payment_records WHERE id=$1", [paymentId]);
+  return { status: saved.rows[0]?.status as PaymentStatus ?? createdPayment.status, provider: saved.rows[0]?.provider ?? createdPayment.provider, providerReference: saved.rows[0]?.provider_reference ?? createdPayment.providerReference, checkoutUrl: createdPayment.checkoutUrl ?? null };
+};
 const withClient = async <T>(operation: (client: PoolClient) => Promise<T>): Promise<T> => {
   const client = await pool.connect();
   try { return await operation(client); }
@@ -714,14 +776,29 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
   const simulatedProvider = paymentProviderMode === "dummy" || paymentProviderMode === "sandbox";
   if (body.paymentMethod !== "Cash" && production && simulatedProvider && !allowSimulatedPayments) return res.status(503).json({ code: "SIMULATED_PAYMENT_DISABLED", error: "Cashless demo payments are disabled in production" });
   const client = await pool.connect();
+  let clientReleased = false;
+  let transactionCommitted = false;
   try {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [body.idempotencyKey]);
     const existing = await client.query("SELECT s.id,s.status,p.id AS payment_id,p.status AS payment_status,(SELECT metadata->>'checkoutUrl' FROM payment_events WHERE payment_id=p.id AND event_type='CREATED' ORDER BY occurred_at DESC LIMIT 1) AS checkout_url FROM sales s LEFT JOIN LATERAL (SELECT id,status FROM payment_records WHERE sale_id=s.id ORDER BY created_at DESC LIMIT 1) p ON true WHERE s.idempotency_key=$1", [body.idempotencyKey]);
     if (existing.rowCount) {
       await client.query("COMMIT");
+      transactionCommitted = true;
       const prior = existing.rows[0];
       const paymentStatus = prior.payment_status ?? (prior.status === "COMPLETED" ? "PAID" : prior.status);
+      if (prior.payment_id && isPaymentInProgress(paymentStatus)) {
+        client.release();
+        clientReleased = true;
+        try {
+          const checkout = await createOrRecoverCheckout(prior.payment_id);
+          const statusCode = checkout.status === "PAID" ? 200 : isPaymentInProgress(checkout.status) ? 202 : 402;
+          return res.status(statusCode).json({ id: prior.id, paymentId: prior.payment_id, status: checkout.status, checkoutUrl: checkout.checkoutUrl, duplicate: true });
+        } catch (error) {
+          logError("payment_checkout_setup_failed", error);
+          return res.status(502).json({ code: "PAYMENT_SETUP_PENDING", error: "Checkout could not be initialized. Retry to resume this payment attempt." });
+        }
+      }
       const statusCode = paymentStatus === "PAID" ? 200 : isPaymentInProgress(paymentStatus) ? 202 : 402;
       return res.status(statusCode).json({ id: prior.id, paymentId: prior.payment_id, status: paymentStatus, checkoutUrl: prior.checkout_url ?? null, duplicate: true, ...(statusCode === 402 ? { error: "Payment was not confirmed. Start a new attempt to retry." } : {}) });
     }
@@ -758,21 +835,10 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
     let paymentProviderName = "CASH";
     let checkoutUrl: string | null = null;
     if (!cash) {
-      const providerMethod: PaymentMethod = body.paymentMethod === "Card" ? "CARD" : body.paymentMethod === "GCash" ? "GCASH" : "MAYA";
-      const returnOrigin = req.header("Origin") ?? process.env.CLIENT_ORIGIN?.split(",")[0]?.trim() ?? "http://localhost:4175";
-      const returnUrl = new URL("/", returnOrigin);
-      returnUrl.searchParams.set("payment_sale", saleId);
-      returnUrl.searchParams.set("payment_id", paymentId!);
-      const successUrl = new URL(returnUrl);
-      successUrl.searchParams.set("payment_return", "success");
-      const cancelUrl = new URL(returnUrl);
-      cancelUrl.searchParams.set("payment_return", "cancel");
-      const result = await paymentProvider.createPayment({ saleId,amount:total,currency:"PHP",method:providerMethod,idempotencyKey:`payment-${body.idempotencyKey}`,successUrl:successUrl.toString(),cancelUrl:cancelUrl.toString() });
-      paymentStatus = result.status;
-      paymentProviderName = result.provider;
-      checkoutUrl = result.checkoutUrl ?? null;
-      await client.query("INSERT INTO payment_records (id,sale_id,method,status,provider,provider_reference,idempotency_key,amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", [paymentId,saleId,body.paymentMethod === "Card" ? "CARD" : "E_WALLET",result.status,result.provider,result.providerReference,`payment-${body.idempotencyKey}`,total]);
-      await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,NULL,$3,'CREATED',$4,$5)", [`payment-event-${randomUUID()}`,paymentId,result.status,req.user!.id,{ provider:result.provider,failureCode:result.failureCode ?? null,checkoutUrl }]);
+      paymentStatus = "PENDING";
+      paymentProviderName = paymentProviderMode.toUpperCase();
+      await client.query("INSERT INTO payment_records (id,sale_id,method,status,provider,provider_reference,idempotency_key,amount) VALUES ($1,$2,$3,'PENDING',$4,NULL,$5,$6)", [paymentId,saleId,body.paymentMethod === "Card" ? "CARD" : "E_WALLET",paymentProviderName,`payment-${body.idempotencyKey}`,total]);
+      await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,NULL,'PENDING','ATTEMPT_CREATED',$3,$4)", [`payment-event-${randomUUID()}`,paymentId,req.user!.id,{ provider:paymentProviderName }]);
     }
     if (paymentStatus === "PAID") {
       await fulfillSale(client,saleId,req.user!.id);
@@ -783,16 +849,29 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
       await audit(client,req.user!.id,"PAYMENT_ATTEMPT","PAYMENT",paymentId ?? saleId,{ paymentStatus,simulated:paymentProviderName === "DUMMY",saleId });
     }
     await client.query("COMMIT");
-    res.status(paymentStatus === "PAID" ? 201 : isPaymentInProgress(paymentStatus) ? 202 : 402).json({ id: saleId, paymentId, status: paymentStatus, provider: paymentProviderName, checkoutUrl, simulated: paymentProviderName === "DUMMY", totalAmount: total, changeAmount: cash ? received-total : 0, items: lines });
+    transactionCommitted = true;
+    if (!cash) {
+      client.release();
+      clientReleased = true;
+      try {
+        const checkout = await createOrRecoverCheckout(paymentId!);
+        const statusCode = checkout.status === "PAID" ? 201 : isPaymentInProgress(checkout.status) ? 202 : 402;
+        return res.status(statusCode).json({ id: saleId, paymentId, status: checkout.status, provider: checkout.provider, checkoutUrl: checkout.checkoutUrl, simulated: checkout.provider === "DUMMY", totalAmount: total, changeAmount: 0, items: lines });
+      } catch (error) {
+        logError("payment_checkout_setup_failed", error);
+        return res.status(502).json({ code: "PAYMENT_SETUP_PENDING", error: "Checkout could not be initialized. Retry to resume this payment attempt." });
+      }
+    }
+    res.status(201).json({ id: saleId, paymentId: null, status: "PAID", provider: "CASH", checkoutUrl, simulated: false, totalAmount: total, changeAmount: received-total, items: lines });
   } catch (error) {
-    await client.query("ROLLBACK");
+    if (!transactionCommitted) await client.query("ROLLBACK");
     const failure = error as Error & { status?: number; code?: string; constraint?: string };
     logError("sale_failed", error);
     if (failure.code === "23514") {
       return res.status(409).json({ code: "INVALID_STATE", error: "The sale totals or stock are inconsistent. Please refresh and try again." });
     }
     res.status(failure.status ?? 500).json({ code: failure.code ?? "SALE_FAILED", error: failure.status ? failure.message : "The sale could not be completed" });
-  } finally { client.release(); }
+  } finally { if (!clientReleased) client.release(); }
 });
 
 app.get("/api/payments/:id", auth, async (req: AuthRequest, res) => {
@@ -808,51 +887,42 @@ app.get("/api/payments/:id", auth, async (req: AuthRequest, res) => {
 });
 
 app.post("/api/payments/:id/cancel", auth, allow("ADMIN", "PHARMACIST", "CASHIER"), async (req: AuthRequest, res) => {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const payment = await client.query('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",s.cashier_id AS "cashierId" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1 FOR UPDATE OF p,s', [req.params.id]);
-    if (!payment.rowCount || (req.user!.role === "CASHIER" && payment.rows[0].cashierId !== req.user!.id)) { await client.query("ROLLBACK"); return res.status(404).json({ code: "NOT_FOUND", error: "Payment attempt not found" }); }
-    const current = payment.rows[0];
-    if (!["PENDING", "AUTHORIZED"].includes(current.status)) { await client.query("COMMIT"); return res.json({ id: current.id, status: current.status }); }
-    const result = await paymentProvider.cancelPayment(current.providerReference);
-    if (!result || result.status !== "CANCELLED") throw Object.assign(new Error("Payment provider could not cancel this attempt"), { status: 409, code: "PAYMENT_CANCEL_FAILED" });
-    await client.query("UPDATE payment_records SET status='CANCELLED',updated_at=now() WHERE id=$1", [current.id]);
-    await client.query("UPDATE sales SET status='VOIDED' WHERE id=$1 AND status='PENDING'", [current.saleId]);
-    await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,$3,'CANCELLED','CANCELLED',$4,$5)", [`payment-event-${randomUUID()}`,current.id,current.status,req.user!.id,{ provider:current.provider }]);
-    await audit(client,req.user!.id,"PAYMENT_CANCELLED","PAYMENT",current.id,{ saleId:current.saleId,provider:current.provider });
-    await client.query("COMMIT");
-    res.json({ id: current.id, status: "CANCELLED" });
-  } catch (error) {
-    await client.query("ROLLBACK");
-    const failure = error as Error & { status?: number; code?: string };
-    if (failure.status) return res.status(failure.status).json({ code: failure.code, error: failure.message });
-    throw error;
-  } finally { client.release(); }
+  const payment = await pool.query('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",s.cashier_id AS "cashierId" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1', [req.params.id]);
+  if (!payment.rowCount || (req.user!.role === "CASHIER" && payment.rows[0].cashierId !== req.user!.id)) return res.status(404).json({ code: "NOT_FOUND", error: "Payment attempt not found" });
+  const current = payment.rows[0];
+  if (!isPaymentInProgress(current.status)) return res.json({ id: current.id, status: current.status });
+  if (!current.providerReference) return res.status(409).json({ code: "PAYMENT_SETUP_PENDING", error: "Checkout is still being initialized; retry cancellation shortly" });
+  const cancelResult = await paymentProvider.cancelPayment(current.providerReference);
+  if (!cancelResult) return res.status(409).json({ code: "PAYMENT_CANCEL_FAILED", error: "Payment provider could not cancel this attempt" });
+  const finalResult = cancelResult.status === "PAID" || cancelResult.status === "PENDING"
+    ? await paymentProvider.getPayment(current.providerReference) ?? cancelResult
+    : cancelResult;
+  if (finalResult.status === "PENDING" || finalResult.status === "AUTHORIZED") return res.status(409).json({ code: "PAYMENT_CANCEL_FAILED", error: "Payment provider has not confirmed cancellation" });
+  const status = await reconcilePayment(current.id,finalResult,"CANCEL_REQUEST");
+  res.json({ id: current.id, status: status ?? finalResult.status });
 });
 
 app.post("/api/payments/:id/refund", auth, allow("ADMIN", "PHARMACIST"), async (req: AuthRequest, res) => {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const payment = await client.query("SELECT id,sale_id,status,provider,provider_reference,amount::float FROM payment_records WHERE id=$1 FOR UPDATE", [req.params.id]);
-    if (!payment.rowCount) { await client.query("ROLLBACK"); return res.status(404).json({ code: "NOT_FOUND", error: "Payment attempt not found" }); }
-    const current = payment.rows[0];
-    if (current.status === "REFUNDED") { await client.query("COMMIT"); return res.json({ id: current.id, status: current.status }); }
-    if (current.status !== "PAID") { await client.query("ROLLBACK"); return res.status(409).json({ code: "INVALID_PAYMENT_STATE", error: "Only paid attempts can be refunded" }); }
-    const result = await paymentProvider.refundPayment(current.provider_reference);
-    if (!result || result.status !== "REFUNDED") throw Object.assign(new Error("Payment provider could not refund this attempt"), { status: 409, code: "PAYMENT_REFUND_FAILED" });
-    await client.query("UPDATE payment_records SET status='REFUNDED',refund_amount=amount,updated_at=now() WHERE id=$1", [current.id]);
-    await client.query("INSERT INTO payment_events (id,payment_id,previous_status,status,event_type,performed_by,metadata) VALUES ($1,$2,'PAID','REFUNDED','REFUND',$3,$4)", [`payment-event-${randomUUID()}`,current.id,req.user!.id,{ amount:current.amount,provider:current.provider }]);
-    await audit(client,req.user!.id,"PAYMENT_REFUNDED","PAYMENT",current.id,{ saleId:current.sale_id,amount:current.amount,provider:current.provider });
-    await client.query("COMMIT");
-    res.json({ id: current.id, status: "REFUNDED" });
-  } catch (error) {
-    await client.query("ROLLBACK");
-    const failure = error as Error & { status?: number; code?: string };
-    if (failure.status) return res.status(failure.status).json({ code: failure.code, error: failure.message });
-    throw error;
-  } finally { client.release(); }
+  const payment = await pool.query('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",p.amount::float AS amount,COALESCE(p.refund_status,\'NONE\') AS "refundStatus",p.refund_provider_reference AS "refundProviderReference",p.refund_requested_amount::float AS "refundRequestedAmount",s.cashier_id AS "cashierId" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1', [req.params.id]);
+  if (!payment.rowCount) return res.status(404).json({ code: "NOT_FOUND", error: "Payment attempt not found" });
+  const current = payment.rows[0];
+  if (current.status === "REFUNDED") return res.json({ id: current.id, status: "REFUNDED" });
+  if (current.refundStatus === "FAILED") return res.status(409).json({ code: "PAYMENT_REFUND_FAILED", error: "The provider rejected this refund; review the provider dashboard before retrying" });
+  let amount = current.refundRequestedAmount ?? current.amount;
+  let result: PaymentResult | null;
+  if (current.refundStatus === "PENDING") {
+    if (!current.refundProviderReference || !paymentProvider.getRefundStatus) return res.status(503).json({ code: "REFUND_STATUS_UNAVAILABLE", error: "Refund is pending and cannot yet be checked" });
+    result = await paymentProvider.getRefundStatus(current.refundProviderReference);
+  } else {
+    if (current.status !== "PAID") return res.status(409).json({ code: "INVALID_PAYMENT_STATE", error: "Only paid attempts can be refunded" });
+    amount = current.amount;
+    result = await paymentProvider.refundPayment(current.providerReference);
+  }
+  if (!result) return res.status(503).json({ code: "PAYMENT_PROVIDER_UNAVAILABLE", error: "Could not confirm the refund state" });
+  const refundStatus = await reconcileRefund(current.id,result,amount,req.user!.id);
+  if (refundStatus === "PENDING") return res.status(202).json({ id: current.id, status: "REFUND_PENDING" });
+  if (refundStatus !== "REFUNDED") return res.status(409).json({ code: "PAYMENT_REFUND_FAILED", error: "Payment provider did not complete the refund" });
+  res.json({ id: current.id, status: "REFUNDED" });
 });
 
 app.get("/api/sales/:id/receipt", auth, async (req: AuthRequest, res) => {

@@ -47,6 +47,7 @@ export const parsePayMongoWebhook = (payload: unknown): PayMongoWebhook | null =
 export interface PaymentProvider {
   createPayment(request: PaymentRequest): Promise<PaymentResult>;
   getPayment(providerReference: string): Promise<PaymentResult | null>;
+  getRefundStatus?(refundReference: string): Promise<PaymentResult | null>;
   cancelPayment(providerReference: string): Promise<PaymentResult | null>;
   refundPayment(providerReference: string, amount?: number): Promise<PaymentResult | null>;
 }
@@ -101,6 +102,10 @@ export class DummyPaymentProvider implements PaymentProvider {
     if (payment.status !== "PAID" || (amount !== undefined && (!Number.isFinite(amount) || amount <= 0))) return null;
     payment.status = "REFUNDED";
     return payment;
+  }
+
+  async getRefundStatus(refundReference: string) {
+    return this.byReference.get(refundReference) ?? null;
   }
 }
 
@@ -231,6 +236,18 @@ export class SandboxPaymentProvider implements PaymentProvider {
       return null;
     }
   }
+
+  async getRefundStatus(refundReference: string): Promise<PaymentResult | null> {
+    try {
+      const payload = await this.fetchJson<{ status?: string; id?: string; reference?: string; provider_reference?: string; failure_code?: string; }>(`/refunds/${encodeURIComponent(refundReference)}`, { method: "GET" });
+      return {
+        status: normalizeSandboxStatus(payload.status ?? "PENDING"),
+        provider: "SANDBOX",
+        providerReference: String(payload.reference ?? payload.provider_reference ?? payload.id ?? refundReference),
+        ...(payload.failure_code ? { failureCode: String(payload.failure_code) } : {}),
+      };
+    } catch { return null; }
+  }
 }
 
 export class PayMongoProvider extends SandboxPaymentProvider {
@@ -350,13 +367,25 @@ export class PayMongoProvider extends SandboxPaymentProvider {
         }),
       }, this.baseUrl.replace(/\/v2$/, "/v1"));
       return {
-        status: payload.data?.attributes?.status === "succeeded" ? "REFUNDED" : "PENDING",
+        status: payload.data?.attributes?.status === "succeeded" ? "REFUNDED" : payload.data?.attributes?.status === "failed" ? "FAILED" : "PENDING",
         provider: "PAYMONGO",
         providerReference: String(payload.data?.id ?? payment.paymentReference),
       };
     } catch {
       return null;
     }
+  }
+
+  async getRefundStatus(refundReference: string): Promise<PaymentResult | null> {
+    try {
+      const payload = await this.request<{ data?: { id?: string; attributes?: { status?: string } } }>(`/refunds/${encodeURIComponent(refundReference)}`);
+      const status = payload.data?.attributes?.status?.toLowerCase();
+      return {
+        status: status === "succeeded" ? "REFUNDED" : status === "failed" ? "FAILED" : "PENDING",
+        provider: "PAYMONGO",
+        providerReference: String(payload.data?.id ?? refundReference),
+      };
+    } catch { return null; }
   }
 }
 
