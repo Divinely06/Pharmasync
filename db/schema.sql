@@ -62,7 +62,7 @@ WHERE NOT EXISTS (SELECT 1 FROM medicine_batches existing WHERE existing.id='bat
 ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS sales (
-  id TEXT PRIMARY KEY, cashier_id TEXT NOT NULL REFERENCES users(id), transaction_date TIMESTAMPTZ NOT NULL DEFAULT now(), subtotal NUMERIC(12,2) NOT NULL CHECK (subtotal >= 0), discount NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (discount >= 0 AND discount <= subtotal), tax NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (tax >= 0), total_amount NUMERIC(12,2) NOT NULL CHECK (total_amount >= 0 AND total_amount = subtotal - discount + tax), payment_method TEXT NOT NULL CHECK (payment_method IN ('Cash', 'GCash', 'Maya', 'Card')), amount_received NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (amount_received >= 0), change_amount NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (change_amount >= 0), status TEXT NOT NULL DEFAULT 'COMPLETED' CHECK (status IN ('COMPLETED', 'VOIDED', 'PENDING')), idempotency_key TEXT UNIQUE, CHECK (payment_method <> 'Cash' OR status <> 'COMPLETED' OR amount_received >= total_amount)
+  id TEXT PRIMARY KEY, cashier_id TEXT NOT NULL REFERENCES users(id), transaction_date TIMESTAMPTZ NOT NULL DEFAULT now(), subtotal NUMERIC(12,2) NOT NULL CHECK (subtotal >= 0), discount NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (discount >= 0 AND discount <= subtotal), tax NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (tax >= 0), total_amount NUMERIC(12,2) NOT NULL CHECK (total_amount >= 0 AND total_amount = subtotal - discount + tax), payment_method TEXT NOT NULL CHECK (payment_method IN ('Cash', 'GCash', 'Maya', 'QRPh', 'Card')), amount_received NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (amount_received >= 0), change_amount NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (change_amount >= 0), status TEXT NOT NULL DEFAULT 'COMPLETED' CHECK (status IN ('COMPLETED', 'VOIDED', 'PENDING')), idempotency_key TEXT UNIQUE, CHECK (payment_method <> 'Cash' OR status <> 'COMPLETED' OR amount_received >= total_amount)
 );
 
 ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_status_check;
@@ -71,7 +71,7 @@ ALTER TABLE sales ADD COLUMN IF NOT EXISTS idempotency_key TEXT UNIQUE;
 ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_totals_check;
 ALTER TABLE sales ADD CONSTRAINT sales_totals_check CHECK (discount <= subtotal AND total_amount = subtotal - discount + tax);
 ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_payment_method_check;
-ALTER TABLE sales ADD CONSTRAINT sales_payment_method_check CHECK (payment_method IN ('Cash', 'GCash', 'Maya', 'Card'));
+ALTER TABLE sales ADD CONSTRAINT sales_payment_method_check CHECK (payment_method IN ('Cash', 'GCash', 'Maya', 'QRPh', 'Card'));
 ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_cash_received_check;
 ALTER TABLE sales ADD CONSTRAINT sales_cash_received_check CHECK (payment_method <> 'Cash' OR status <> 'COMPLETED' OR amount_received >= total_amount);
 
