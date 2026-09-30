@@ -1,0 +1,77 @@
+[
+  {
+    "method": "GET",
+    "path": "/api/session",
+    "status": 401
+  },
+  {
+    "method": "GET",
+    "path": "/api/session",
+    "status": 401
+  },
+  {
+    "method": "POST",
+    "path": "/api/login",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/state",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/health",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/session",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/session",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/state",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/state",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/api/logout",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/api/login",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/state",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/api/logout",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/api/login",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/state",
+    "status": 200
+  }
+]
