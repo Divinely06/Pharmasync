@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AccessArea,
   AuditLog,
@@ -560,18 +560,27 @@ function PosPage({ state, onRefresh }: { state: PharmacyState; onRefresh: () => 
     };
   }, [scannerOpen]);
 
-  const availableStockByMedicine = new Map<string, number>();
   const currentDay = today();
-  for (const batch of state.medicineBatches) {
-    if (batch.quantity <= 0 || batch.expirationDate < currentDay) continue;
-    availableStockByMedicine.set(batch.medicineId, (availableStockByMedicine.get(batch.medicineId) ?? 0) + batch.quantity);
-  }
+  const availableStockByMedicine = useMemo(() => {
+    const available = new Map<string, number>();
+    for (const batch of state.medicineBatches) {
+      if (batch.quantity <= 0 || batch.expirationDate < currentDay) continue;
+      available.set(batch.medicineId, (available.get(batch.medicineId) ?? 0) + batch.quantity);
+    }
+    return available;
+  }, [state.medicineBatches, currentDay]);
   const availableStock = (medicineId: string) => availableStockByMedicine.get(medicineId) ?? 0;
 
-  const visibleCategories = getVisibleCategoryFilters(state.medicines, (medicine) => availableStock(medicine.id) > 0);
+  const visibleCategories = useMemo(
+    () => getVisibleCategoryFilters(state.medicines, (medicine) => availableStock(medicine.id) > 0),
+    [state.medicines, availableStockByMedicine],
+  );
   const categoryFilters = visibleCategories.includes(category) ? category : "All";
   const selectedCategory = categoryFilters;
-  const filteredMedicines = filterPOSMedicines(state.medicines, search, selectedCategory, (medicine) => availableStock(medicine.id) > 0);
+  const filteredMedicines = useMemo(
+    () => filterPOSMedicines(state.medicines, search, selectedCategory, (medicine) => availableStock(medicine.id) > 0),
+    [state.medicines, search, selectedCategory, availableStockByMedicine],
+  );
   const items = filteredMedicines.slice(0, searchPage * POS_PAGE_SIZE);
 
   const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);

@@ -10,8 +10,8 @@ import { rateLimit } from "express-rate-limit";
 import { auditFilterSchema, buildSessionCookieOptions, inventoryMovementSchema, isRequestOriginAllowed, listFilterSchema, loginSchema, medicineSchema, medicineUpdateSchema, passwordChangeSchema, passwordResetSchema, purchaseSchema, reportFilterSchema, saleSchema, sessionTokenSchema, supplierSchema, userCreateSchema, userUpdateSchema, validateSaleTotals } from "./validation.js";
 import { allocateFefo } from "./inventory.js";
 import { createLogicalBackup, dumpDatabase } from "./backup.js";
-import { createPaymentProvider, isPaymentInProgress, parsePayMongoWebhook, verifyPayMongoWebhookSignature, type PaymentMethod, type PaymentStatus } from "./payment-provider.js";
-import { applyDatabaseSchema, missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from "./db.js";
+import { createPaymentProvider, isPaymentInProgress, parsePayMongoWebhook, verifyPayMongoWebhookSignature, type PaymentMethod, type PaymentResult, type PaymentStatus } from "./payment-provider.js";
+import { missingDatabaseTables, normalizeDatabaseUrl, requiredDatabaseTables } from "./db.js";
 
 const connectionString = normalizeDatabaseUrl(process.env.DATABASE_URL ?? process.env.POSTGRESQL_ADDON_URI ?? "");
 if (!connectionString) throw new Error("DATABASE_URL is required");
@@ -20,6 +20,7 @@ const serverless = Boolean(process.env.VERCEL);
 const production = process.env.NODE_ENV === "production";
 const paymentProviderMode = process.env.PAYMENT_PROVIDER ?? "dummy";
 const allowSimulatedPayments = !production || process.env.ALLOW_SIMULATED_PAYMENTS === "true";
+const netSaleAmount = "GREATEST(0, s.total_amount - LEAST(s.total_amount, COALESCE((SELECT sum(p.refund_amount) FROM payment_records p WHERE p.sale_id=s.id),0)))";
 function createPool() {
   return new Pool({
     connectionString,
@@ -44,7 +45,6 @@ app.use((req, res, next) => {
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   next();
 });
-if (!process.env.VERCEL) await applyDatabaseSchema(pool);
 const logError = (event: string, error: unknown) => {
   const message = error instanceof Error ? error.message : "Unknown error";
   const databaseError = error as { code?: string; table?: string; column?: string; constraint?: string };
@@ -405,7 +405,6 @@ app.get("/api/reports", auth, allow("ADMIN", "PHARMACIST"), async (req, res) => 
   const { from, to } = parsed.data;
   if (from && to && from > to) return res.status(400).json({ code: "INVALID_FILTER", error: "Start date must be on or before end date" });
   const dateWhere = "($1::date IS NULL OR s.transaction_date::date >= $1::date) AND ($2::date IS NULL OR s.transaction_date::date <= $2::date)";
-  const netSaleAmount = "GREATEST(0, s.total_amount - LEAST(s.total_amount, COALESCE((SELECT sum(p.refund_amount) FROM payment_records p WHERE p.sale_id=s.id),0)))";
   const params = [from ?? null, to ?? null];
   const [summary, monthly, payment, category, topSelling, inventory, movement] = await withClient(async (client) => Promise.all([
     await client.query(`SELECT count(*)::int AS transactions,COALESCE(sum(${netSaleAmount}),0)::float AS "totalRevenue",COALESCE(avg(${netSaleAmount}),0)::float AS "averageBasket",COALESCE((SELECT sum(si.quantity)::int FROM sale_items si JOIN sales s2 ON s2.id=si.sale_id WHERE s2.status='COMPLETED' AND ($1::date IS NULL OR s2.transaction_date::date >= $1::date) AND ($2::date IS NULL OR s2.transaction_date::date <= $2::date)),0)::int AS "totalUnits" FROM sales s WHERE s.status='COMPLETED' AND ${dateWhere}`, params),
@@ -905,7 +904,7 @@ app.post("/api/sales", auth, allow("ADMIN", "CASHIER"), async (req: AuthRequest,
 });
 
 app.get("/api/payments/:id", auth, async (req: AuthRequest, res) => {
-  const result = await queryPaymentRead('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",p.amount::float AS amount,s.status AS "saleStatus",s.cashier_id AS "cashierId" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1', [req.params.id]);
+  const result = await queryPaymentRead('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",p.amount::float AS amount,s.status AS "saleStatus",s.cashier_id AS "cashierId" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1', [String(req.params.id)]);
   if (!result.rowCount || (req.user!.role === "CASHIER" && result.rows[0].cashierId !== req.user!.id)) return res.status(404).json({ code: "NOT_FOUND", error: "Payment attempt not found" });
   const current = result.rows[0];
   if (isPaymentInProgress(current.status) && current.providerReference) {
@@ -917,7 +916,7 @@ app.get("/api/payments/:id", auth, async (req: AuthRequest, res) => {
 });
 
 app.post("/api/payments/:id/cancel", auth, allow("ADMIN", "PHARMACIST", "CASHIER"), async (req: AuthRequest, res) => {
-  const payment = await queryPaymentRead('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",s.cashier_id AS "cashierId" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1', [req.params.id]);
+  const payment = await queryPaymentRead('SELECT p.id,p.sale_id AS "saleId",p.status,p.provider,p.provider_reference AS "providerReference",s.cashier_id AS "cashierId" FROM payment_records p JOIN sales s ON s.id=p.sale_id WHERE p.id=$1', [String(req.params.id)]);
   if (!payment.rowCount || (req.user!.role === "CASHIER" && payment.rows[0].cashierId !== req.user!.id)) return res.status(404).json({ code: "NOT_FOUND", error: "Payment attempt not found" });
   const current = payment.rows[0];
   if (!isPaymentInProgress(current.status)) return res.json({ id: current.id, status: current.status });

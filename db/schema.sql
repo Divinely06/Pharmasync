@@ -378,6 +378,9 @@ CREATE INDEX IF NOT EXISTS medicines_stock_idx ON medicines (quantity, reorder_l
 CREATE INDEX IF NOT EXISTS medicines_supplier_idx ON medicines (supplier_id);
 CREATE INDEX IF NOT EXISTS medicine_batches_fefo_idx ON medicine_batches (medicine_id, expiration_date) WHERE quantity > 0;
 CREATE INDEX IF NOT EXISTS sale_item_batches_batch_idx ON sale_item_batches (batch_id);
+CREATE INDEX IF NOT EXISTS sale_items_sale_idx ON sale_items (sale_id, id);
+CREATE INDEX IF NOT EXISTS purchase_items_purchase_idx ON purchase_items (purchase_id, id);
+CREATE INDEX IF NOT EXISTS inventory_transactions_date_idx ON inventory_transactions (occurred_at DESC);
 CREATE INDEX IF NOT EXISTS sales_date_idx ON sales (transaction_date);
 CREATE INDEX IF NOT EXISTS purchases_supplier_date_idx ON purchases (supplier_id, purchase_date);
 CREATE INDEX IF NOT EXISTS payment_records_sale_idx ON payment_records (sale_id, created_at);

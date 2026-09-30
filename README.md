@@ -9,6 +9,8 @@ pnpm install
 pnpm db:migrate
 ```
 
+Run the migration before starting the API on a new or upgraded database. API startup does not apply schema changes or repair legacy columns; use the explicit migration command for those operations.
+
 Run the API and Vite in separate terminals with `pnpm api` and `pnpm dev`. Vite proxies `/api` requests to port `8787` by default. `pnpm typecheck`, `pnpm test`, and `pnpm build` are the project verification commands.
 
 To run browser tests, install Playwright's Chromium and Linux runtime dependencies with `pnpm exec playwright install --with-deps chromium` on the host. The dependency install requires package-manager privileges; then run `pnpm test:e2e`.
