@@ -4,17 +4,17 @@ This document tracks the work required to turn the current prototype into a func
 
 ## Current Baseline
 
-- Frontend: React, Vite, Tailwind CSS, with a typed API client and no browser storage for authoritative data.
-- Backend: Express API in `server/index.ts` with durable cookie sessions, role checks, medicine/supplier/user writes, and transactional sales.
+- Frontend: React, Vite, Tailwind CSS, with a typed API client, role-aware screens, and no browser storage for authoritative data.
+- Backend: Express API in `server/index.ts` with durable cookie sessions, role checks, CRUD, purchase and inventory workflows, reports, audit, backups, and transactional sales.
 - Database: PostgreSQL schema and separate demo seed in `db/schema.sql` and `db/seed.sql`.
-- Cashless checkout is an explicitly labelled, environment-controlled dummy simulation. It is not a real payment integration.
-- This is a verified demo foundation, not the Definition of Done. Purchase/receiving and stock workflows, complete user administration, report/audit APIs, production payment lifecycle/webhooks, real backup/restore, and broad automated integration/browser coverage remain open.
+- Cashless checkout supports an explicitly labelled, environment-controlled dummy provider and PayMongo hosted checkout with signed webhooks.
+- This is a functioning demo foundation, not the Definition of Done. Broad automated integration/browser coverage, explicit webhook replay handling, and verified backup restore remain open.
 
 ## Priority 0: Establish One Source Of Truth
 
 - [x] Remove `localStorage` as the primary application database.
-- [ ] Add a typed frontend API client for authentication, state queries, CRUD, POS, inventory, reports, audit, and backup.
-- [ ] Add loading, empty, unauthorized, database-error, and retry states.
+- [x] Add a typed frontend API client for authentication, state queries, CRUD, POS, inventory, reports, audit, and backup.
+- [x] Add loading, empty, unauthorized, database-error, and retry states.
 - [x] Keep only display preferences in browser storage; never store passwords, access tokens, or authoritative records there. (No application data is currently persisted in browser storage.)
 - [ ] Add a single authenticated session provider and role/permission helper.
 - [x] Decide whether the browser uses secure HTTP-only cookies or short-lived bearer tokens with a refresh mechanism. Prefer HTTP-only, secure, same-site cookies for a browser deployment. (Uses durable server-side sessions and HTTP-only, same-site cookies; secure cookies are enabled in production.)
@@ -28,8 +28,8 @@ This document tracks the work required to turn the current prototype into a func
 - [x] Add a backup history table containing requested time, completion time, status, file metadata, requester, and error-safe message.
 - [x] Add indexes for barcode, medicine search, expiration, quantity/reorder level, supplier, sale date, and audit filters.
 - [x] Add migration versioning and separate seed data from schema creation.
-- [ ] Add database constraints for payment methods, totals, positive quantities, valid dates, and valid status transitions.
-- [ ] Model batch-level stock before implementing receiving or expiry workflows if one medicine can have multiple batches.
+- [x] Add database constraints for payment methods, totals, positive quantities, valid dates, and valid status transitions.
+- [x] Model batch-level stock before implementing receiving or expiry workflows if one medicine can have multiple batches.
 
 ## Authentication, Authorization, And Security
 
@@ -40,7 +40,7 @@ This document tracks the work required to turn the current prototype into a func
 - [x] Add centralized `requireAuth` and `requireRole` middleware.
 - [x] Enforce authorization on every resource, not only on sales.
 - [x] Restrict `/api/state` so each role receives only the data it is allowed to see.
-- [ ] Add request validation using typed schemas for every write endpoint.
+- [x] Add request validation using typed schemas for every write endpoint.
 - [x] Add rate limiting, security headers, strict CORS, and safe production error handling.
 - [x] Never return password hashes, secrets, provider keys, or database errors.
 - [x] Use server-derived user identity for audit records and payment operations.
@@ -49,14 +49,14 @@ This document tracks the work required to turn the current prototype into a func
 ## Backend API And Domain Services
 
 - [ ] Split `server/index.ts` into routes, middleware, validation, database helpers, domain services, and configuration.
-- [ ] Add medicine list/search/detail/create/update/archive endpoints.
-- [ ] Add supplier list/search/detail/create/update/deactivate endpoints.
-- [ ] Add user list/create/update/deactivate/reset-password endpoints for admins.
-- [ ] Add purchase order and receiving endpoints using database transactions.
-- [ ] Add inventory adjustment, damaged, expired, return, and stock-movement endpoints.
-- [ ] Add server-side report queries for dashboard, sales, inventory value, low stock, and expiration alerts.
-- [ ] Add paginated and filterable audit-log endpoints for admins.
-- [ ] Add receipt detail endpoint and a server-generated printable receipt view or print-safe client view.
+- [x] Add medicine list/search/detail/create/update/archive endpoints.
+- [x] Add supplier list/search/detail/create/update/deactivate endpoints.
+- [x] Add user list/create/update/deactivate/reset-password endpoints for admins.
+- [x] Add purchase order and receiving endpoints using database transactions.
+- [x] Add inventory adjustment, damaged, expired, return, and stock-movement endpoints.
+- [x] Add server-side report queries for dashboard, sales, inventory value, low stock, and expiration alerts.
+- [x] Add paginated and filterable audit-log endpoints for admins.
+- [x] Add receipt detail endpoint and a server-generated printable receipt view or print-safe client view.
 - [x] Return stable error codes and user-safe messages instead of raw exception text.
 - [x] Make sales idempotent so a repeated request cannot create duplicate transactions.
 - [x] Reject expired or inactive medicines at checkout according to the pharmacy policy.
@@ -104,63 +104,63 @@ export interface PaymentProvider {
 
 ### Dummy Provider
 
-- [ ] Implement `DummyPaymentProvider` behind an environment-selected provider name.
+- [x] Implement `DummyPaymentProvider` behind an environment-selected provider name.
 - [x] Provide explicit demo outcomes: success, pending, failure, cancelled, and timeout.
 - [x] Make dummy payments visibly labelled as simulation in the UI and receipt.
-- [ ] Persist every attempt and status transition in PostgreSQL.
-- [ ] Require an idempotency key and return the same result for a repeated key.
-- [ ] Never mark a sale as completed until the payment is `PAID` or a valid cash payment is confirmed.
-- [ ] Add a test-only endpoint or controlled fixture, never a hidden production bypass.
+- [x] Persist every attempt and status transition in PostgreSQL.
+- [x] Require an idempotency key and return the same result for a repeated key.
+- [x] Never mark a sale as completed until the payment is `PAID` or a valid cash payment is confirmed.
+- [x] Add a test-only endpoint or controlled fixture, never a hidden production bypass.
 
 ### Real Provider Adapter
 
 - [ ] Choose the provider based on deployment country, business account availability, fees, webhook support, and sandbox access.
-- [ ] Keep provider API keys only in backend environment variables or a secret manager.
-- [ ] Implement provider checkout/payment-intent creation, status lookup, cancellation, and refund.
+- [x] Keep provider API keys only in backend environment variables or a secret manager.
+- [x] Implement provider checkout/payment-intent creation, status lookup, cancellation, and refund.
 - [ ] Verify webhook signatures and reject replayed or unknown events.
 - [ ] Make webhook handling idempotent and store the raw event ID plus processed timestamp.
-- [ ] Treat the provider as the payment authority; do not trust a browser success redirect.
-- [ ] Add reconciliation for payments that remain pending or disagree with the provider.
-- [ ] Never store full card numbers, CVV, or wallet credentials.
-- [ ] Use the provider's hosted checkout or tokenization so sensitive payment data does not pass through this application.
+- [x] Treat the provider as the payment authority; do not trust a browser success redirect.
+- [x] Add reconciliation for payments that remain pending or disagree with the provider.
+- [x] Never store full card numbers, CVV, or wallet credentials.
+- [x] Use the provider's hosted checkout or tokenization so sensitive payment data does not pass through this application.
 
 ### POS Cashless Workflow
 
-1. Create a sale draft with locked prices and stock checks.
-2. Create a payment attempt with an idempotency key.
-3. For the dummy provider, show a controlled simulated result.
-4. For a real provider, redirect to hosted checkout or display the provider payment instructions.
-5. Accept payment completion only from a verified backend response or signed webhook.
-6. In one database transaction, mark the payment paid, complete the sale, reduce stock, create inventory records, and write the audit record.
-7. On failure, leave stock unchanged and keep the sale/payment attempt traceable.
-8. Generate a receipt containing method, status, provider, reference, and any required notice.
+- [x] Create a sale draft with locked prices and stock checks.
+- [x] Create a payment attempt with an idempotency key.
+- [x] For the dummy provider, show a controlled simulated result.
+- [x] For a real provider, redirect to hosted checkout or display the provider payment instructions.
+- [x] Accept payment completion only from a verified backend response or signed webhook.
+- [x] In one database transaction, mark the payment paid, complete the sale, reduce stock, create inventory records, and write the audit record.
+- [x] On failure, leave stock unchanged and keep the sale/payment attempt traceable.
+- [ ] Generate a receipt containing method, status, provider, reference, and any required notice.
 
 ## Frontend Features
 
 - [ ] Split `src/App.tsx` into layout, auth, dashboard, POS, inventory, suppliers, users, reports, audit, and shared UI modules.
-- [ ] Add real API hooks/services instead of direct state mutation.
+- [x] Add real API hooks/services instead of direct state mutation.
 - [x] Add role-aware navigation and route guards.
 - [ ] Add debounced server-side medicine search with pagination and filters.
 - [ ] Add barcode keyboard-input handling and camera scanning where browser support permits.
 - [x] Show clear `Medicine not found` and `Insufficient stock available` messages.
-- [ ] Add medicine reference panel with a clear non-medical-advice notice.
-- [ ] Add receiving and stock adjustment workflows for authorized roles.
+- [x] Add medicine reference panel with a clear non-medical-advice notice.
+- [x] Add receiving and stock adjustment workflows for authorized roles.
 - [x] Add POS payment selection for cash and cashless methods.
-- [ ] Add pending-payment, retry, failure, cancellation, and duplicate-submit states.
-- [ ] Add printable thermal and standard receipts.
+- [x] Add pending-payment, retry, failure, cancellation, and duplicate-submit states.
+- [x] Add printable thermal and standard receipts.
 - [ ] Add accessible labels, focus states, keyboard navigation, and responsive tablet behavior.
 - [x] Remove hardcoded dates, fake dashboard metrics, and local-only success messages.
 
 ## Audit, Backup, And Operations
 
-- [ ] Audit every login, failed login, CRUD change, stock movement, sale, payment transition, refund, backup, and authorization failure.
-- [ ] Make audit records append-only to ordinary application users; allow admin read/filter only.
-- [ ] Implement a protected backend backup command using `pg_dump` or the managed provider backup API.
-- [ ] Record backup result and metadata without exposing credentials or filesystem paths.
+- [x] Audit every login, failed login, CRUD change, stock movement, sale, payment transition, refund, backup, and authorization failure.
+- [x] Make audit records append-only to ordinary application users; allow admin read/filter only.
+- [x] Implement a protected backend backup command using `pg_dump` or the managed provider backup API.
+- [x] Record backup result and metadata without exposing credentials or filesystem paths.
 - [ ] Add backup restore instructions and verify a restore in a disposable database.
 - [x] Add health checks for API and database readiness.
-- [ ] Add structured server logging with secrets and payment data redacted.
-- [ ] Add `.env.example` entries for database, session, client origin, payment provider, and backup configuration.
+- [x] Add structured server logging with secrets and payment data redacted.
+- [x] Add `.env.example` entries for database, session, client origin, payment provider, and backup configuration.
 
 ## Testing And Acceptance Criteria
 
