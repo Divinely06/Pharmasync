@@ -20,13 +20,21 @@ PALE = "EAF4F2"
 evidence = [
     ("System login", "01-login.png", "The sign-in screen is presented before authenticated access. Demo credentials are not shown in the image."),
     ("Main system functionality", "02-dashboard.png", "Admin dashboard loaded with live application state after successful authentication."),
-    ("Data creation", "04-medicine-draft.png", "Medicine creation form populated as a draft. Save was not pressed, so no medicine record was written."),
-    ("API communication", "05-database-health.png", "The browser requested the health endpoint and received HTTP 200 with PostgreSQL reported as the active database."),
-    ("Data exchange between systems", "06-pos-provider-handoff.png", "POS shows the cashless provider handoff path. Checkout was not started; the exchange was not sent to PayMongo."),
-    ("Database integration", "03-inventory.png", "Inventory records shown in the authenticated application. GET /api/state returned HTTP 200 from the PostgreSQL-backed API."),
-    ("External service integration", "06-pos-provider-handoff.png", "Cashless payment methods are wired to the provider flow. Automated PayMongo tests use mocked HTTP; no live external payment was attempted."),
-    ("Error handling", "08-api-error-handling.png", "A controlled browser-route simulation returned HTTP 503 from /api/session; the app displayed its Service unavailable state."),
-    ("Security features", "10-admin-user-roles.png", "Admin user roster shows the ADMIN, PHARMACIST, and CASHIER accounts. Separate captures compare their navigation access."),
+    ("Database-backed inventory", "03-inventory.png", "Inventory records loaded after authenticated GET /api/state from PostgreSQL."),
+    ("Inventory and stock workflows", "12-inventory-workflows.png", "Expanded inventory screen includes catalog, purchase receiving, and stock-movement workflows. No mutation was submitted."),
+    ("Medicine data creation", "04-medicine-draft.png", "Medicine creation form populated as a draft. Save was not pressed, so no medicine record was written."),
+    ("API and database connectivity", "05-database-health.png", "The browser requested the health endpoint and received HTTP 200 with PostgreSQL reported as the active database."),
+    ("POS data exchange and provider handoff", "06-pos-provider-handoff.png", "A medicine is staged in the cart and GCash selected. Checkout was not started; no payment request was sent."),
+    ("Search and validation feedback", "07-no-results.png", "POS presents a clear no-match state for an unknown medicine search."),
+    ("Service error handling", "08-api-error-handling.png", "A controlled browser-route simulation returned HTTP 503 from /api/session; the app displayed its Service unavailable state."),
+    ("Admin roles and user roster", "10-admin-user-roles.png", "Admin sees the active ADMIN, PHARMACIST, and CASHIER user records and user-administration controls."),
+    ("User creation", "13-user-creation-draft.png", "A new pharmacist account is prepared in the admin form as an unsaved draft; no user was created."),
+    ("Audit and traceability", "14-audit-log.png", "Admin audit screen shows recorded system activity with actor, action, entity, and timestamp fields."),
+    ("Reports and analytics", "15-reports.png", "Admin report view presents sales and inventory reporting controls and summary metrics."),
+    ("Backup administration", "16-backup-administration.png", "Admin backup history and controls are shown. No backup operation was started."),
+    ("Supplier data creation", "17-supplier-creation-draft.png", "Supplier details are populated as a draft; Save supplier was not pressed."),
+    ("Pharmacist authorization", "11-pharmacist-role-security.png", "Pharmacist navigation includes inventory and suppliers, and excludes POS and user administration."),
+    ("Cashier authorization", "09-cashier-role-security.png", "Cashier navigation includes POS and excludes inventory and user administration."),
 ]
 
 
@@ -59,7 +67,7 @@ def add_page_number(paragraph):
     paragraph._p.append(field)
 
 
-def add_evidence_block(document, number, title, image_name, note):
+def add_evidence_block(document, number, title, image_name, note, image_width=5.45):
     heading = document.add_paragraph()
     heading.paragraph_format.space_before = Pt(2)
     heading.paragraph_format.space_after = Pt(2)
@@ -81,7 +89,7 @@ def add_evidence_block(document, number, title, image_name, note):
     picture_paragraph = document.add_paragraph()
     picture_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     picture_paragraph.paragraph_format.space_after = Pt(1)
-    picture_paragraph.add_run().add_picture(str(image_path), width=Inches(5.45))
+    picture_paragraph.add_run().add_picture(str(image_path), width=Inches(image_width))
 
     caption = document.add_paragraph(image_name)
     caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -208,19 +216,10 @@ for role, areas in [
     set_cell_text(cells[0], role, bold=True, color=TEAL, size=8)
     set_cell_text(cells[1], areas, size=8)
 
-groups = [evidence[index:index + 2] for index in range(0, len(evidence), 2)]
-number = 1
-for group_index, group in enumerate(groups):
+for number, (title_text, image_name, note_text) in enumerate(evidence, start=1):
     document.add_page_break()
-    for title_text, image_name, note_text in group:
-        add_evidence_block(document, number, title_text, image_name, note_text)
-        number += 1
-
-document.add_page_break()
-document.add_heading("Role-specific views", level=1)
-document.add_paragraph("The captures below show the enforced navigation differences after separate authenticated sign-ins.")
-add_evidence_block(document, 10, "Pharmacist access", "11-pharmacist-role-security.png", "Inventory and supplier access are visible; POS and user administration are not.")
-add_evidence_block(document, 11, "Cashier access", "09-cashier-role-security.png", "POS access is visible; inventory and user administration are not.")
+    image_width = 4.5 if image_name == "12-inventory-workflows.png" else 5.45
+    add_evidence_block(document, number, title_text, image_name, note_text, image_width)
 
 document.save(OUTPUT)
 print(f"Created {OUTPUT}")

@@ -45,6 +45,56 @@
     "status": 200
   },
   {
+    "method": "GET",
+    "path": "/api/audit",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/audit",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/reports",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/reports",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/backups",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/medicines/archived",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/backups/changes",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/backups",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/medicines/archived",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/backups/changes",
+    "status": 200
+  },
+  {
     "method": "POST",
     "path": "/api/logout",
     "status": 200

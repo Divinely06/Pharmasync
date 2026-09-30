@@ -47,6 +47,7 @@ try {
   await page.getByRole("button", { name: /^Inventory/ }).click();
   await page.getByRole("button", { name: "Add medicine", exact: true }).waitFor({ state: "visible" });
   await screenshot("03-inventory.png");
+  await screenshot("12-inventory-workflows.png", { fullPage: true });
 
   await page.getByRole("button", { name: "Add medicine", exact: true }).click();
   await page.getByLabel("Brand name").fill("Demo Vitamin C 500 mg (draft)");
@@ -88,6 +89,33 @@ try {
   await page.getByText("User roster").waitFor({ state: "visible" });
   await screenshot("10-admin-user-roles.png");
 
+  await page.getByLabel("Username", { exact: true }).fill("demo-pharmacist-draft");
+  await page.getByLabel("Full name", { exact: true }).fill("Demo Pharmacist Draft");
+  await page.getByLabel("Email", { exact: true }).fill("demo-pharmacist@example.test");
+  await page.locator("#user-role").selectOption("PHARMACIST");
+  await screenshot("13-user-creation-draft.png");
+
+  await page.getByRole("button", { name: "Audit Logs", exact: true }).click();
+  await page.getByText("Audit trail", { exact: true }).waitFor({ state: "visible" });
+  await page.getByRole("table").waitFor({ state: "visible" });
+  await screenshot("14-audit-log.png");
+
+  await page.getByRole("button", { name: "Reports", exact: true }).click();
+  await page.getByText("Monthly Revenue").waitFor({ state: "visible" });
+  await screenshot("15-reports.png");
+
+  await page.getByRole("button", { name: "Backups", exact: true }).click();
+  await page.getByText("Database backups").waitFor({ state: "visible" });
+  await screenshot("16-backup-administration.png");
+
+  await page.getByRole("button", { name: "Suppliers", exact: true }).click();
+  await page.getByText("Add supplier").waitFor({ state: "visible" });
+  await page.getByLabel("Supplier name", { exact: true }).fill("Demo Supplier Draft");
+  await page.getByLabel("Contact person", { exact: true }).fill("Demo Contact");
+  await page.getByLabel("Phone", { exact: true }).fill("+63 900 000 0000");
+  await page.getByLabel("Email", { exact: true }).fill("demo-supplier@example.test");
+  await screenshot("17-supplier-creation-draft.png");
+
   await page.getByRole("button", { name: "Logout" }).click();
   await page.getByLabel("Username").waitFor({ state: "visible" });
   await signIn(demoUsers.pharmacist);
@@ -105,7 +133,7 @@ try {
   await screenshot("09-cashier-role-security.png");
 
   await writeFile(resolve(outputDir, "api-traffic.json"), `${JSON.stringify(apiTraffic, null, 2)}\n`);
-  console.log(`Captured ${apiTraffic.length} API responses and 11 screenshots in ${outputDir}`);
+  console.log(`Captured ${apiTraffic.length} API responses and 17 screenshots in ${outputDir}`);
   for (const item of apiTraffic) console.log(`${item.method} ${item.path} ${item.status}`);
 } finally {
   await context.close();
