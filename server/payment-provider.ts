@@ -7,7 +7,7 @@ export type PaymentResult = { status: PaymentStatus; provider: string; providerR
 
 export const isPaymentInProgress = (status: PaymentStatus) => status === "PENDING" || status === "AUTHORIZED";
 
-export type PayMongoWebhook = { eventId: string | null; eventType: string; liveMode: boolean; providerReference: string };
+export type PayMongoWebhook = { eventId: string | null; eventType: string; liveMode: boolean; providerReference: string | null };
 
 export const verifyPayMongoWebhookSignature = (rawBody: Buffer, signatureHeader: string | undefined, secret: string, liveMode: boolean) => {
   if (!signatureHeader || !secret) return false;
@@ -35,12 +35,11 @@ export const parsePayMongoWebhook = (payload: unknown): PayMongoWebhook | null =
   const resourceAttributes = resource.attributes && typeof resource.attributes === "object" ? resource.attributes as { checkout_session_id?: unknown; checkout_session?: unknown } : {};
   const nestedSession = resourceAttributes.checkout_session && typeof resourceAttributes.checkout_session === "object" ? (resourceAttributes.checkout_session as { id?: unknown }).id : undefined;
   const reference = resource.type === "checkout_session" ? resource.id : resourceAttributes.checkout_session_id ?? nestedSession;
-  if (typeof reference !== "string" || !reference) return null;
   return {
     eventId: typeof eventData.id === "string" ? eventData.id : null,
     eventType: attributes.type,
     liveMode: attributes.livemode,
-    providerReference: reference,
+    providerReference: typeof reference === "string" && reference ? reference : null,
   };
 };
 

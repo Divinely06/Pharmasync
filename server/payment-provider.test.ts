@@ -91,6 +91,7 @@ describe("PayMongo integration", () => {
   it("extracts the checkout session from PayMongo webhook events", () => {
     expect(parsePayMongoWebhook({ data: { id: "evt_123", attributes: { type: "checkout_session.payment.paid", livemode: true, data: { id: "cs_123", type: "checkout_session" } } } })).toEqual({ eventId: "evt_123", eventType: "checkout_session.payment.paid", liveMode: true, providerReference: "cs_123" });
     expect(parsePayMongoWebhook({ data: { attributes: { type: "payment.paid", livemode: false, data: { id: "pay_123", type: "payment", attributes: { checkout_session_id: "cs_123" } } } } })).toMatchObject({ providerReference: "cs_123", liveMode: false });
+    expect(parsePayMongoWebhook({ data: { attributes: { type: "customer.created", livemode: false, data: { id: "cus_123", type: "customer" } } } })).toMatchObject({ eventType: "customer.created", providerReference: null });
     expect(parsePayMongoWebhook({ data: { attributes: { type: "payment.paid", data: { id: "pay_123", type: "payment" } } } })).toBeNull();
   });
 

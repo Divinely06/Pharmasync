@@ -62,7 +62,7 @@ app.use(express.json({
 }));
 app.use((req, res, next) => {
   const origin = req.header("Origin");
-  if (req.path === "/api/webhooks/paymongo" && !origin) return next();
+  if (req.path === "/api/webhooks/paymongo") return next();
   const allowedOrigin = process.env.CLIENT_ORIGIN;
   if (!isRequestOriginAllowed(req.method, origin, allowedOrigin, production)) return res.status(403).json({ code: "ORIGIN_REJECTED", error: "Request origin is not allowed" });
   const configuredOrigins = (allowedOrigin ?? "").split(",").map((entry) => entry.trim().replace(/\/$/, ""));
@@ -284,11 +284,16 @@ app.post("/api/webhooks/paymongo", async (req, res) => {
   if (!verifyPayMongoWebhookSignature(rawBody, req.header("PayMongo-Signature"), webhookSecret, event.liveMode)) {
     return res.status(401).json({ code: "INVALID_WEBHOOK_SIGNATURE", error: "PayMongo webhook signature is invalid" });
   }
-  const payment = await pool.query("SELECT id,status FROM payment_records WHERE provider='PAYMONGO' AND provider_reference=$1", [event.providerReference]);
-  if (!payment.rowCount || !isPaymentInProgress(payment.rows[0].status)) return res.status(200).json({ received: true });
-  const remote = await paymentProvider.getPayment(event.providerReference);
-  if (!remote) return res.status(503).json({ code: "PAYMENT_PROVIDER_UNAVAILABLE", error: "Could not confirm the PayMongo payment state" });
-  await reconcilePayment(payment.rows[0].id,remote,`WEBHOOK:${event.eventType}`,event.eventId);
+  if (!event.providerReference) return res.status(200).json({ received: true });
+  try {
+    const payment = await pool.query("SELECT id,status FROM payment_records WHERE provider='PAYMONGO' AND provider_reference=$1", [event.providerReference]);
+    if (!payment.rowCount || !isPaymentInProgress(payment.rows[0].status)) return res.status(200).json({ received: true });
+    const remote = await paymentProvider.getPayment(event.providerReference);
+    if (!remote) logError("paymongo_webhook_payment_confirmation_failed", new Error("Could not confirm the PayMongo payment state"));
+    else await reconcilePayment(payment.rows[0].id,remote,`WEBHOOK:${event.eventType}`,event.eventId);
+  } catch (error) {
+    logError("paymongo_webhook_processing_failed", error);
+  }
   res.status(200).json({ received: true });
 });
 const rateLimitValidation = { forwardedHeader: false };
