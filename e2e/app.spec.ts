@@ -33,3 +33,14 @@ test("cashier navigation excludes admin screens and POS search reports no match"
   await page.getByRole("textbox", { name: "Search medicines or scan barcode" }).fill("NO-SUCH-MEDICINE-E2E");
   await expect(page.getByText("Medicine not found.")).toBeVisible();
 });
+
+test("switching from admin Backups to cashier returns to an allowed page", async ({ page }) => {
+  await signIn(page, "admin", "admin123");
+  await page.getByRole("button", { name: "Backups" }).click();
+  await expect(page.getByText("Database backups")).toBeVisible();
+  await page.getByRole("button", { name: "Logout" }).click();
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
+  await signIn(page, "cashier", "cashier123");
+  await expect(page.getByText("Today's Revenue")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Backups" })).toHaveCount(0);
+});

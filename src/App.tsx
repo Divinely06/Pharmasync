@@ -120,6 +120,7 @@ function App() {
       loginSucceeded = true;
       const loaded = hydrateState(await api.state());
       setState(loaded);
+      setPage("dashboard");
       setAuthUser(user);
     } catch (error) {
       if (loginSucceeded) await api.logout().catch(() => undefined);
@@ -237,6 +238,7 @@ function App() {
 
   const currentUser = authUser;
   const visibleNav = navMeta.filter((item) => canAccess(currentUser.role, item.area));
+  const currentPage = visibleNav.some((item) => item.id === page) ? page : "dashboard";
   const navigate = (nextPage: Page) => {
     if (visibleNav.some((item) => item.id === nextPage)) setPage(nextPage);
   };
@@ -248,7 +250,7 @@ function App() {
     setInventoryFilter("expiring-soon");
     navigate("inventory");
   };
-  return <SystemShell {...{ state, page, setPage, mobileOpen, setMobileOpen, currentUser, logout, loggingOut, lowStockCount, todayRevenue, visibleNav, refreshData, appError, setAppError, navigate, inventoryFilter, setInventoryFilter, showLowStock, showExpiringSoon }} />;
+  return <SystemShell {...{ state, page: currentPage, setPage, mobileOpen, setMobileOpen, currentUser, logout, loggingOut, lowStockCount, todayRevenue, visibleNav, refreshData, appError, setAppError, navigate, inventoryFilter, setInventoryFilter, showLowStock, showExpiringSoon }} />;
 }
 
 function SystemShell({
